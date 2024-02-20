@@ -23,7 +23,7 @@ python3 sage_dgl_partition.py --use-sample --use-tt --epochs 2 --device "cuda:0"
 ## GNNSAGE Settings
 
 | Dataset | Notes | MemoryGPU (MB) | #Epochs | #BatchSize | TestAcc (%) | SamplingSize | Runtime (s) |
-|---|---|---|---|---|---|---|
+|---|---|---|---|---|---|---|---|
 | ogbn-products | Baseline | 5923.5 | 2 | 1024 | 70.46% | [5, 10, 15] | 26.88 |
 | ogbn-products | FullNeighbor | 16659.5 | / | 1024 | / | / | / |
 | ogbn-products | NoTT-Sample-1 | 8555.3 | 2 | 1024 | 74.49% | [30, 50, 100] | 481.74 |
