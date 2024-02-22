@@ -34,6 +34,10 @@ python3 sage_dgl_partition.py --use-sample --use-tt --epochs 2 --device "cuda:0"
 | ogbn-products | TTD-Embeddings-1 | 4691.4 | 2 | 1024 | 64.17% | [30, 50, 100] | 479.63 |
 | ogbn-products | TTD-Embeddings-2 | 128.1 | 2 | 128 | 51.71% | [5, 10, 15] | 104.29 |
 | ogbn-products | TTD-Embeddings-3 | 710.1 | 2 | 1024 | 49.31% | [5, 10, 15] | 53.51 |
+| ogbn-products | TTD-Embeddings-4(R16) | 710.7 | 2 | 1024 | 66.62% | [5, 10, 15] | 58.15 |
+| ogbn-products | TTD-Embeddings-4-Cached(R16) | 860 | 2 | 1024 | 64.43% | [5, 10, 15] | 83.08 |
+| ogbn-products | TTD-Embeddings-4(R4) | 709.3 | 2 | 1024 | 45.73% | [5, 10, 15] | 52.35 |
+| ogbn-products | TTD-Embeddings-4(R2) | 708.7 | 2 | 1024 | 36.34% | [5, 10, 15] | 52.05 |
 
 ### Hyperparameters (so far)
 - tt_rank
