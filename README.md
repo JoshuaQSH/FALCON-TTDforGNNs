@@ -1,10 +1,11 @@
 ## Observation & Contribution
 
 - Training larger graph at a time will give more a accurate result (FullNeighbor if possible)
+  - But a tradeoff appeared, should consider the gradient loss as well
 - A larger embedding table before GNN -> More tt-cores
 - A one-time preprocessing step is required. Key idea is to align graph topological information with the TT data structure (customized partitioning)
 - Reorder the graph nodes based on the partition results (nodes in the same partition will have continuous indices)
-- Efficient TT Table 
+- Efficient TT Table for index computation reused
 
 ## How to run
 ```
@@ -30,14 +31,19 @@ python3 sage_dgl_partition.py --use-sample --use-tt --epochs 2 --device "cuda:0"
 | ogbn-products | NoTT-Sample-2 | 5900.1 | 2 | 1024 | 29.52% | [1, 1, 1] | 20.21 |
 | ogbn-products | NoTT-FullNeighbor-1 | 15152.3 | 2 | 128 | 72.09% | / | 13118.90 |
 | ogbn-products | NoTT-Sample-3 | 5902.9 | 2 | 128 | 70.99% | [5, 10, 15] | 66.33 |
+| ogbn-products | NoTT-Sample-4 | 5914.6 | 2 | 128 | 68.7% | [5, 5, 10] | 26.39 |
 | ogbn-products | TTD-Embeddings-Full | 8506.3 | 2 | 128 | 58.92% | / | 13252.72 |
 | ogbn-products | TTD-Embeddings-1 | 4691.4 | 2 | 1024 | 64.17% | [30, 50, 100] | 479.63 |
 | ogbn-products | TTD-Embeddings-2 | 128.1 | 2 | 128 | 51.71% | [5, 10, 15] | 104.29 |
 | ogbn-products | TTD-Embeddings-3 | 710.1 | 2 | 1024 | 49.31% | [5, 10, 15] | 53.51 |
+| ogbn-products | TTD-Embeddings-4(R24) | 713.2 | 2 | 1024 | 66.62% | [5, 10, 15] | 58.15 |
 | ogbn-products | TTD-Embeddings-4(R16) | 710.7 | 2 | 1024 | 66.62% | [5, 10, 15] | 58.15 |
 | ogbn-products | TTD-Embeddings-4-Cached(R16) | 860 | 2 | 1024 | 64.43% | [5, 10, 15] | 83.08 |
 | ogbn-products | TTD-Embeddings-4(R4) | 709.3 | 2 | 1024 | 45.73% | [5, 10, 15] | 52.35 |
 | ogbn-products | TTD-Embeddings-4(R2) | 708.7 | 2 | 1024 | 36.34% | [5, 10, 15] | 52.05 |
+
+- NoTT-Sample-4 and TTD-Embeddings-4(R16) have similar TestAcc with the same batchsize and epoch settings. TTD saved 8x memory space but 50% Runtime drop.
+- NoTT-Sample-3 gives even higher test acc but with more sampling neighbors in the second layer, slower runtime. TTD will save 8x memory and also gain 1.23x runtime speedup
 
 ### Hyperparameters (so far)
 - tt_rank
