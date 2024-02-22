@@ -39,6 +39,7 @@ def parse_args():
     parser.add_argument("--tt-rank", type=int, default=8)
     parser.add_argument("--partition", type=int, default=0, help="-1 for permute, >0 for METIS")
     parser.add_argument('--init', type=str, default="ortho")
+    parser.add_argument('--emb-name', type=str, default="fbtt")
     parser.add_argument('--dim', type=int, default=100, help='Embedding dimension.')
     
     # Extra parts

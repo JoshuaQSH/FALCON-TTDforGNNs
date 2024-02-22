@@ -117,7 +117,8 @@ def run(train_loader, full_neighbor_loader, data, args):
         tt_rank = args.tt_rank, 
         dist = args.init, 
         graph = g, 
-        device = args.device)
+        device = args.device,
+        embed_name = args.emb_name)
     model = model.to(device)
     loss_fcn = nn.CrossEntropyLoss()
     optimizer = optim.Adam(model.parameters(), lr=args.lr, weight_decay=args.wd)

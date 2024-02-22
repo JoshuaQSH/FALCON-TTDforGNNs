@@ -11,6 +11,16 @@ sys.path.insert(0, '/home/shenghao/FBTT-Embedding')
 from tt_embeddings_ops import TTEmbeddingBag
 from tt_utils import *
 
+from torch.utils.cpp_extension import load
+
+# sys.path.insert(0, '/home/shenghao/tensor-train-for-gcn/TT4GNN/Efficient_TT')
+from Efficient_TT.efficient_tt import Eff_TTEmbedding
+
+# Eff_TT_embedding_cuda = load(name="efficient_tt_table", sources=[
+#     "/home/shenghao/tensor-train-for-gcn/TT4GNN/Efficient_TT/efficient_kernel_wrap.cpp", 
+#     "/home/shenghao/tensor-train-for-gcn/TT4GNN/Efficient_TT/efficient_tt_cuda.cu", 
+#     ], verbose=True)
+
 
 class SAGE(nn.Module):
     def __init__(self,
@@ -25,7 +35,8 @@ class SAGE(nn.Module):
                  tt_rank=16,
                  dist=None,
                  graph=None,
-                 device='cpu'):
+                 device='cpu',
+                 embed_name ='fbtt'):
         super().__init__()
         self.n_layers = n_layers
         self.n_hidden = n_hidden
@@ -42,6 +53,7 @@ class SAGE(nn.Module):
         self.use_tt = use_tt
         # Hacked for now
         self.device = th.device(device)
+        self.embed_name = embed_name
 
         if use_tt:
             if in_feats == 128:
@@ -49,21 +61,36 @@ class SAGE(nn.Module):
             else:
                 q_shapes = None
             p_shapes = [125, 140, 140]
-            #p_shapes = None
+            # p_shapes = None
             if device is not 'cpu':
-                self.embed_layer = TTEmbeddingBag(
-                        num_embeddings=num_nodes,
-                        embedding_dim=in_feats,
-                        tt_ranks=[tt_rank, tt_rank],
+                if self.embed_name == "fbtt":
+                    print("Using FBTT")
+                    self.embed_layer = TTEmbeddingBag(
+                            num_embeddings=num_nodes,
+                            embedding_dim=in_feats,
+                            tt_ranks=[tt_rank, tt_rank],
+                            tt_p_shapes=p_shapes,
+                            tt_q_shapes=q_shapes,
+                            sparse=False,
+                            use_cache=False,
+                            weight_dist="normal",
+                            )
+                elif self.embed_name == "eff_tt":
+                    print("Using Efficient TT")
+                    self.embed_layer = Eff_TTEmbedding(
+                        num_embeddings = num_nodes,
+                        embedding_dim = in_feats,
                         tt_p_shapes=p_shapes,
                         tt_q_shapes=q_shapes,
-                        sparse=False,
-                        use_cache=False,
-                        weight_dist="normal",
-                        )
+                        tt_ranks = [tt_rank, tt_rank],
+                        weight_dist = "uniform",
+                        batch_size = 1024
+                    ).to(self.device)
+                else:
+                    print("Unknown embedding type")
             else:
                 self.embed_layer = th.nn.Embedding(num_nodes, in_feats)
-           
+                       
             if dist == 'eigen':
                 eigen_vals, eigen_vecs = get_eigen(graph, in_feats, name='ogbn-products')
                 eigen_vecs = th.tensor(eigen_vecs * np.sqrt(eigen_vals).reshape((1, len(eigen_vals))), dtype=th.float32)
@@ -77,7 +104,7 @@ class SAGE(nn.Module):
                         [4, 5, 5]
                     )
                 for i in range(3):
-                    self.embed_layer.tt_cores[i].data = tt_cores[i]
+                    self.embed_layer.tt_cores[i].data = tt_cores[i].to(self.device)
             elif dist == 'ortho':
                 print("initialized from orthogonal cores")
                 tt_cores = get_ortho(
@@ -86,7 +113,8 @@ class SAGE(nn.Module):
                     [4, 5, 5]
                 )
                 for i in range(3):
-                    self.embed_layer.tt_cores[i].data = th.tensor(tt_cores[i])
+                    # self.embed_layer.tt_cores[i].data = th.tensor(tt_cores[i]).to(device)
+                    pass
             elif dist == 'dortho':
                 print('initialized from decomposing orthogonal matrix')
                 rand_A = np.random.random(size=(125 * 140 * 140, 100)).astype(np.float32)
@@ -100,7 +128,7 @@ class SAGE(nn.Module):
                         [4, 5, 5]
                     )
                 for i in range(3):
-                    self.embed_layer.tt_cores[i].data = tt_cores[i]
+                    self.embed_layer.tt_cores[i].data = tt_cores[i].to(self.device)
 
         else:
             self.embed_layer = th.nn.Embedding(num_nodes, in_feats)   
@@ -108,10 +136,10 @@ class SAGE(nn.Module):
 
     def forward(self, blocks, input_nodes):
         #h = x
-        # breakpoint()
         if self.use_tt:
             offsets = th.arange(input_nodes.shape[0] + 1).to(self.device)
-            h = self.embed_layer(input_nodes.to(self.device), offsets)
+            input_nodes = input_nodes.to(self.device)
+            h = self.embed_layer(input_nodes, offsets)
         else:
             h = self.embed_layer(input_nodes.to(self.device))
 
