@@ -1,0 +1,3 @@
+# ninja log v5
+0	24913	1708514563919710318	/home/shenghao/tensor-train-for-gcn/TT4GNN/Efficient_TT/build/temp.linux-x86_64-cpython-310/efficient_tt_cuda.o	d6052676087975d9
+0	26902	1708514565903864083	/home/shenghao/tensor-train-for-gcn/TT4GNN/Efficient_TT/build/temp.linux-x86_64-cpython-310/efficient_kernel_wrap.o	3d94cdcba76517d5
