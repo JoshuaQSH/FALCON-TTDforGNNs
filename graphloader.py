@@ -117,7 +117,8 @@ def dgl_partition(graph, labels, train_idx, val_idx, test_idx, partition):
         nodes_perm = th.randperm(graph.num_nodes())
         par_g = dgl.reorder_graph(graph, 'custom', permute_config={'nodes_perm':nodes_perm})
         print("Partition graph by METIS into {} parts".format(partition))
-        par_g = dgl.reorder_graph(graph, 'metis', permute_config={'k':partition})
+        # par_g = dgl.reorder_graph(graph, 'metis', permute_config={'k':partition})
+        par_g = dgl.reorder_graph(graph, 'rcmk')
     else:
         print("Randomly permute the node order")
         nodes_perm = th.randperm(graph.num_nodes())
