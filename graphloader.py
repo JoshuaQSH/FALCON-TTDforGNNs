@@ -99,6 +99,17 @@ def dgl_unpack_data(data, args):
 
     return train_loader, full_neighbor_loader, data
 
+def custom_reordering(graph):
+    degrees = graph.in_degrees().numpy()
+    # threshold for the degree settings
+    degree_threshold = np.percentile(degrees, 80) 
+    high_degree_vertex_indices = np.where(degrees >= degree_threshold)[0]
+    reordered_indices = np.concatenate((high_degree_vertex_indices,
+                                        np.setdiff1d(np.arange(graph.number_of_nodes()),
+                                        high_degree_vertex_indices)))
+    par_g = dgl.reorder_graph(graph, node_permute_algo='custom', permute_config={'nodes_perm': reordered_indices})
+    return par_g
+
 def dgl_partition(graph, labels, train_idx, val_idx, test_idx, partition):
     graph.ndata['label'] = labels
     num_nodes = graph.num_nodes()
@@ -112,13 +123,22 @@ def dgl_partition(graph, labels, train_idx, val_idx, test_idx, partition):
     graph.ndata['val_mask'] = th.tensor(val_mask)
     graph.ndata['test_mask'] = th.tensor(test_mask)
 
-    if partition > 0:
-        print("Randomly permute the node order")
-        nodes_perm = th.randperm(graph.num_nodes())
-        par_g = dgl.reorder_graph(graph, 'custom', permute_config={'nodes_perm':nodes_perm})
-        print("Partition graph by METIS into {} parts".format(partition))
-        # par_g = dgl.reorder_graph(graph, 'metis', permute_config={'k':partition})
-        par_g = dgl.reorder_graph(graph, 'rcmk')
+    if partition != 0:
+        # Reorder
+        if partition == -1:
+            par_g = custom_reordering(graph)
+        elif partition == -2:
+            print("Partition graph by rcmk")
+            par_g = dgl.reorder_graph(graph, 'rcmk')
+
+        else:
+            # print("Randomly permute the node order")
+            # nodes_perm = th.randperm(graph.num_nodes())
+            # par_g = dgl.reorder_graph(graph, 'custom', permute_config={'nodes_perm':nodes_perm})
+            
+            print("Partition graph by METIS into {} parts".format(partition))
+            par_g = dgl.reorder_graph(graph, 'metis', permute_config={'k':partition})
+
     else:
         print("Randomly permute the node order")
         nodes_perm = th.randperm(graph.num_nodes())

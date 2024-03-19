@@ -15,6 +15,19 @@ import timeit
 from collections import Counter
 from itertools import product, permutations, combinations
 
+def max_batch_size(model, device, dummy_input, init_batch_size):
+    optimal_batch_size = init_batch_size
+    while(optimal_batch_size):
+        try:
+            _ = model(dummy_input)
+            optimal_batch_size += 1
+        except Exception as err:
+            print("Optimal batch size is: ", optimal_batch_size)
+            raise err
+
+def give_throughput(repetitions, optimal_batch_size, total_time):
+    return (repetitions*optimal_batch_size) / total_time
+
 def memory_usage(in_tensor, is_tt=False):
     # Memory = \prob_{i=1}^{n} (d_i) * SizeOf(DataType)
     # Memory = \sum_{i=1}^{n} (r_{i-1} * d_i * r_i) * SizeOf(DataType)

@@ -18,7 +18,6 @@ from dgl_sage import SAGE
 from graphloader import dgl_graph_loader
 
 
-
 def compute_acc(pred, labels):
     """
     Compute the accuracy of prediction given the labels.
@@ -51,6 +50,11 @@ def load_subtensor(nfeat, labels, seeds, input_nodes):
 
 def train(train_loader, model, loss_fcn, optimizer, lr_scheduler, nfeat, labels, device, epoch, args, iter_tput, log=None):
     # Loop over the dataloader to sample the computation dependency graph as a list of blocks.
+    
+    # For the throughput testing
+    ave_forward_throughput=[]
+    ave_backward_throughput=[]
+    
     # Enable dataloader cpu affinitization for cpu devices (no effect on gpu)
     # with train_loader.enable_cpu_affinity():
     for step, (input_nodes, seeds, blocks) in enumerate(train_loader):
@@ -66,9 +70,17 @@ def train(train_loader, model, loss_fcn, optimizer, lr_scheduler, nfeat, labels,
         # Compute loss and prediction
         batch_pred = model(blocks, batch_inputs)
         loss = loss_fcn(batch_pred, batch_labels)
+        # Forward throughput
+        fwd_throughput= len(seeds)/(time.time()-tic_step)
+        ave_forward_throughput.append(fwd_throughput)
+
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
+        # Backward throughput
+        bwd_throughput= len(seeds)/(time.time()-tic_step)
+        ave_backward_throughput.append(bwd_throughput)
+
         lr_scheduler.step(loss)
         iter_tput.append(len(seeds) / (time.time() - tic_step))
         if step % args.log_every == 0:
@@ -80,6 +92,9 @@ def train(train_loader, model, loss_fcn, optimizer, lr_scheduler, nfeat, labels,
             else:
                 print('Epoch {:05d} | Step {:05d} | Loss {:.4f} | Train Acc {:.4f} | Speed (samples/sec) {:.4f} | GPU {:.1f} MB'.format(
                     epoch, step, loss.item(), acc.item(), np.mean(iter_tput[3:]), gpu_mem_alloc))
+    
+    return ave_forward_throughput, ave_backward_throughput, iter_tput
+                    
 
 def run(train_loader, full_neighbor_loader, data, args):
     # Logging
@@ -92,7 +107,7 @@ def run(train_loader, full_neighbor_loader, data, args):
         is_sample = 'sample'
     else:
         is_sample = 'full'
-    saved_log_name = saved_log_path + '{}-{}-{}-{}-batch-{}-{}.log'.format(args.model, args.device, is_sample, args.fan_out, args.batch, timestamp)
+    saved_log_name = saved_log_path + '{}-{}-{}-{}-batch-{}-par-{}-{}.log'.format(args.model, args.device, is_sample, args.fan_out, args.batch, args.partition, timestamp)
     if args.logging:
         log = Logger(saved_log_name, level='debug')
         log.logger.debug("[Running GraphSAGE Model == Hidden: {}, Layers: {} ==]".format(args.num_hidden, args.num_layers))
@@ -133,7 +148,18 @@ def run(train_loader, full_neighbor_loader, data, args):
     total_time = 0.0
     for epoch in range(args.epochs):
         tic = time.time()
-        train(train_loader, model, loss_fcn, optimizer, lr_scheduler, nfeat, labels, device, epoch, args, iter_tput, log=log)
+        ave_forward_throughput, ave_backward_throughput, iter_tput = train(train_loader, 
+                model, 
+                loss_fcn, 
+                optimizer, 
+                lr_scheduler, 
+                nfeat, 
+                labels, 
+                device, 
+                epoch, 
+                args, 
+                iter_tput, 
+                log=log)
         toc = time.time()
         total_time += (toc - tic)
         if args.logging:
@@ -171,12 +197,21 @@ def run(train_loader, full_neighbor_loader, data, args):
                 log.logger.info('Best Eval Acc {:.4f} Test Acc {:.4f}'.format(best_eval_acc, best_test_acc))
             else:
                 print('Best Eval Acc {:.4f} Test Acc {:.4f}'.format(best_eval_acc, best_test_acc))
+    ave_fwd_throughput=np.mean(ave_forward_throughput[5:])
+    ave_bwd_throughput=np.mean(ave_backward_throughput[5:])
+    
     if args.logging:
         log.logger.info('Avg epoch time: {:.4f}'.format(total_time / args.epochs))
         log.logger.info('End2End Time(s): {:.4f}'.format(total_time))
+        log.logger.info('Avg forward throughput is {:.4f}'.format(ave_fwd_throughput))
+        log.logger.info('Avg backward throughput is {:.4f}'.format(ave_bwd_throughput))
+        log.logger.info('Avg overall throughput is {:.4f}'.format(np.mean(iter_tput[5:])))
     else:
         print('Avg epoch time: {:.4f}'.format(total_time / args.epochs))
         print('End2End Time(s): {:.4f}'.format(total_time))
+        print('Avg forward throughput is {:.4f}'.format(ave_fwd_throughput))
+        print('Avg backward throughput is {:.4f}'.format(ave_bwd_throughput))
+        print('Avg overall throughput is {:.4f}'.format(np.mean(iter_tput[5:])))
 
     return best_test_acc
         
@@ -192,7 +227,7 @@ if __name__ == '__main__':
     # load ogbn-products data - dgl version
     target_dataset = args.dataset
     root = os.path.join(os.environ['HOME'], 'gnn_related', 'dataset')
-
+    
     train_loader, full_neighbor_loader, data = dgl_graph_loader(target_dataset, root, device, args)
     print('Init from {}'.format(args.init))
     

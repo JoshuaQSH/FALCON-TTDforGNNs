@@ -75,6 +75,7 @@ class SAGE(nn.Module):
                             use_cache=False,
                             weight_dist="normal",
                             )
+                # TODO: hardcoded for the batch_size - default 1024
                 elif self.embed_name == "eff_tt":
                     print("Using Efficient TT")
                     self.embed_layer = Eff_TTEmbedding(
@@ -84,7 +85,7 @@ class SAGE(nn.Module):
                         tt_q_shapes=q_shapes,
                         tt_ranks = [tt_rank, tt_rank],
                         weight_dist = "uniform",
-                        batch_size = 1024
+                        batch_size = 258
                     ).to(self.device)
                 else:
                     print("Unknown embedding type")
@@ -112,9 +113,10 @@ class SAGE(nn.Module):
                     p_shapes,
                     [4, 5, 5]
                 )
+                # TODO: initialized the tt_cores weights
                 for i in range(3):
-                    # self.embed_layer.tt_cores[i].data = th.tensor(tt_cores[i]).to(device)
                     pass
+                    # self.embed_layer.tt_cores[i].data = th.tensor(tt_cores[i]).to(device)
             elif dist == 'dortho':
                 print('initialized from decomposing orthogonal matrix')
                 rand_A = np.random.random(size=(125 * 140 * 140, 100)).astype(np.float32)
@@ -139,6 +141,7 @@ class SAGE(nn.Module):
         if self.use_tt:
             offsets = th.arange(input_nodes.shape[0] + 1).to(self.device)
             input_nodes = input_nodes.to(self.device)
+
             h = self.embed_layer(input_nodes, offsets)
         else:
             h = self.embed_layer(input_nodes.to(self.device))
