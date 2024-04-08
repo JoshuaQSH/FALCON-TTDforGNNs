@@ -1,0 +1,58 @@
+## Related Works
+
+- Sampling Methods (mini batching)
+- CPU-GPU offloading
+  - A Unified CPU-GPU Protocol for GNN Training (2024)
+  
+Connected Paper Graphs:
+
+- SCGraph: Accelerating Sample-based GNN Training by Staged Caching of Features on GPUs (2022)
+- GraNNDis: Efficient Unified Distributed Training Framework for Deep GNNs on Large Clusters (2023)
+- Helios: An Efficient Out-of-core GNN Training System on Terabyte-scale Graphs with In-memory Performance (2023)
+- Scalable and Efficient Full-Graph GNN Training for Large Graphs (2023)
+- Two-level Graph Caching for Expediting Distributed GNN Training (2023)
+- Feature-Oriented Sampling for Fast and Scalable GNN Training (2022)
+- MariusGNN: Resource-Efficient Out-of-Core Training of Graph Neural Networks (2022)
+  -   Multi-GPUs
+- BGL: GPU-Efficient GNN Training by Optimizing Graph Data I/O and Preprocessing (2021)
+- GNNPipe: Scaling Deep GNN Training with Pipelined Model Parallelism (2023)
+- Communication-Efficient Graph Neural Networks with Probabilistic Neighborhood Expansion Analysis and Caching (2023)
+- FreshGNN: Reducing Memory Access via Stable Historical Embeddings for Graph Neural Network Training (2022)
+  - mini batch training framwork, hitorical cache to reuse GNN node embeddings instead of recomputing
+- PaGraph: Scaling GNN training on large graphs via computation-aware caching (2020)
+  - SOTA method, single server multi-GPUs
+- PCGraph: Accelerating GNN Inference on Large Graphs via Partition Caching (2021)
+  - adaptive GNN inference and feature partition caching
+- GNNPipe: Accelerating Distributed Full-Graph GNN Training with Pipelined Model Parallelism (2023)
+- Efficient Data Loader for Fast Sampling-Based GNN Training on Large Graphs (2021)
+- HongTu: Scalable Full-Graph GNN Training on Multiple GPUs
+  - multi-GPUs
+- BatchGNN: Efficient CPU-Based Distributed GNN Training on Very Large Graphs (2023)
+  - macrobatching, multiple minibatches' subgraph sampling and feature fetching are batched into one communication
+  - cache aggregated input features
+- SAS: A Simple, Accurate and Scalable Node Classification Algorithm (2021)
+- DGS: Communication-Efficient Graph Sampling for Distributed GNN Training (2022)
+  - compared to FastGCN 1.25×
+- Accelerating GNN Training by Adapting Large Graphs to Distributed Heterogeneous Architectures (2023)
+  - long memory accessing latency and inefficient data transfer of vertex features from CPU to GPU.
+  - mini-batch sampling and feature aggregation and supports fast and efficient single-GPU
+  - GNN-layer-aware feature caching method
+- Survey on Graph Neural Network Acceleration: An Algorithmic Perspective (2022)
+- Marius++: Large-Scale Training of Graph Neural Networks on a Single Machine (2022)
+  - disk-optimized training for GNNs and introduces a series of data organization and algorithmic contributions
+- Distributed Graph Neural Network Training: A Survey (2022)
+- GNNLab: a factored system for sample-based GNN training over GPUs (2022)
+- BRGraph: An efficient graph neural network training system by reusing batch data on GPU (2022)
+  - batch reusing (BR) strategy to avoid duplicate data transmission
+- Optimizing Task Placement and Online Scheduling for Distributed GNN Training Acceleration (2022)
+- DUCATI: A Dual-Cache Training System for Graph Neural Networks on Giant Graphs with the GPU (2023)
+  - Adj-Cache to further accelerate the mini-batch generation and better utilize GPU memory
+  - cache allocation plan under different settings
+- Distributed Hybrid CPU and GPU training for Graph Neural Networks on Billion-Scale Heterogeneous Graphs (2021)
+- Accelerating Sampling and Aggregation Operations in GNN Frameworks with GPU Initiated Direct Storage Accesses (2023)
+- Rethinking graph data placement for graph neural network training on multiple GPUs (2022)
+- Accelerating Training and Inference of Graph Neural Networks with Fast Sampling and Pipelining (2021)
+- GLISP: A Scalable GNN Learning System by Exploiting Inherent Structural Properties of Graphs (2024)
+- Accelerating GNN training with locality-aware partial execution (2021)
+- EXACT: Scalable Graph Neural Networks Training via Extreme Activation Compression (2022)
+- ADGNN: Towards Scalable GNN Training with Aggregation-Difference Aware Sampling (2023)
