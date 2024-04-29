@@ -5,6 +5,7 @@ import scipy
 
 import sys
 sys.path.insert(0, '/home/shenghao/FBTT-Embedding')
+sys.path.insert(0, '/home/shenghao/home-3090/FBTT-Embedding')
 from tt_embeddings_ops import TTEmbeddingBag
 from tt_embeddings_ops import tt_matrix_to_full
 import torch.nn.init as init
@@ -20,11 +21,14 @@ def parse_args():
     parser.add_argument('--lr', type=float, default=0.01, help='Learning rate (default: 0.01)')
     parser.add_argument('--test-sparse', action="store_true", default=False, help='A unit test for the sparse format (default: False)')
     parser.add_argument('--dropout', type=float, default=0.5)
+    parser.add_argument("--weight-decay", type=float, default=5e-4, help="Weight for L2 loss")
+    parser.add_argument("--aggregator-type", type=str, default="gcn", help="Aggregator type: mean/gcn/pool/lstm")
 
     # Data loader
     parser.add_argument('--sample', type=int, default=30, help='Number of samples (default: 30)')
     parser.add_argument('--batch', type=int, default=1024, help='Batch size (default: 1024)')
     parser.add_argument('--neighbors', type=int, default=2, help='Number of neighbors for each sampling (default: 2)')
+    # ["ogbn-arxiv", "ogbn-products", "ogbn-proteins", "ogbn-papers100M"]
     parser.add_argument('--dataset', type=str, default="ogbn-products", help='Dataset (default: "ogbn-products")')
     parser.add_argument('--use-sample', action="store_true", default=False, help='Whether to sample the dataset (default: False)')
     parser.add_argument('--num-workers', type=int, default=4, help="Number of sampling processes. Use 0 for no extra process.")
@@ -32,15 +36,20 @@ def parse_args():
     # GNN layers related
     parser.add_argument('--num-hidden', type=int, default=256)
     parser.add_argument('--num-layers', type=int, default=3)
+    parser.add_argument("--use-linear", action="store_true", help="Use linear layer (for GCN).")
+    parser.add_argument("--use-labels", action="store_true", help="Use labels in the training set as input features (also for GCN).")
 
     # TT
     parser.add_argument('--fan-out', type=str, default='5,10,15')
     parser.add_argument("--use-tt", action="store_true", default=False, help="Use tt-emb layer. Whether to use TT format (default: False). ")
-    parser.add_argument("--tt-rank", type=int, default=8)
+    # parser.add_argument("--tt-rank", type=int, default=8)
     parser.add_argument("--partition", type=int, default=0, help="-1 for customized permute, >0 for METIS, ==0 for -2 for rcmk")
     parser.add_argument('--init', type=str, default="ortho")
     parser.add_argument('--emb-name', type=str, default="fbtt")
     parser.add_argument('--dim', type=int, default=100, help='Embedding dimension.')
+    parser.add_argument('--tt-rank', type=str, default="16,16", help='The ranks of TT cores')
+    parser.add_argument('--p-shapes', type=str, default="125,140,140", help='The product of all elements is not smaller than num_embeddings.')
+    parser.add_argument('--q-shapes', type=str, default="5,5,4", help='The product of all elements is equal to embedding_dim.')
     
     # Extra parts
     parser.add_argument('--val-batch-size', type=int, default=10000)
@@ -48,10 +57,12 @@ def parse_args():
     parser.add_argument('--eval-every', type=int, default=1)
     parser.add_argument('--save-pred', type=str, default='')
     parser.add_argument('--wd', type=float, default=0)
+    parser.add_argument('--workspace', type=str, default='')
     
     parser.add_argument("--n-runs", type=int, default=1)
     parser.add_argument("--store-emb", action="store_true", help="Store training embedding")
     parser.add_argument('--save-model', action="store_true")
+    parser.add_argument('--plot', action="store_true", help="Plot the graph degree distributitions")
     parser.add_argument('--logging', action="store_true", help="Whether to log the training process")
 
     global args
