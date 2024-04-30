@@ -36,6 +36,7 @@ def parse_args():
     # GNN layers related
     parser.add_argument('--num-hidden', type=int, default=256)
     parser.add_argument('--num-layers', type=int, default=3)
+    parser.add_argument('--num-heads', type=int, default=3, help="Number of attention heads (for GAT)")
     parser.add_argument("--use-linear", action="store_true", help="Use linear layer (for GCN).")
     parser.add_argument("--use-labels", action="store_true", help="Use labels in the training set as input features (also for GCN).")
 

@@ -16,7 +16,7 @@ from matplotlib import pyplot as plt
 from matplotlib.ticker import AutoMinorLocator, MultipleLocator
 from ogb.nodeproppred import DglNodePropPredDataset, Evaluator
 
-from gnn_model import GCN
+from gnn_model import GCN, GAT
 from tt_utils import *
 from graphloader import dgl_graph_loader
 from utils import Logger, gpu_timing, memory_usage, calculate_access_percentages, plot_access_percentages
@@ -30,15 +30,18 @@ from FBTT.tt_embeddings_ops import TTEmbeddingBag
 # device = None
 # in_feats, n_classes = None, None
 
-
 # GCN so far
-def gen_model(args, in_feats, n_classes):    
-    if args.use_labels:
-        model = GCN(
-            in_feats + n_classes, args.num_hidden, n_classes, args.num_layers, F.relu, args.dropout, args.use_linear)
-    else:
-        model = GCN(in_feats, args.num_hidden, n_classes, args.num_layers, F.relu, args.dropout, args.use_linear)
-        
+def gen_model(args, in_feats, n_classes):
+    if args.model == 'gcn': 
+        if args.use_labels:
+            model = GCN(
+                in_feats + n_classes, args.num_hidden, n_classes, args.num_layers, F.relu, args.dropout, args.use_linear)
+        else:
+            model = GCN(in_feats, args.num_hidden, n_classes, args.num_layers, F.relu, args.dropout, args.use_linear)
+    elif args.model == 'gat':
+        model = GAT(in_feats, n_classes, args.num_hidden, args.num_layers, args.num_heads, F.relu, args.dropout)
+        # model = GAT_new(in_feats, args.num_hidden, n_classes, heads=[8, 1])
+    
     return model
 
 
@@ -68,7 +71,7 @@ def adjust_learning_rate(optimizer, lr, epoch):
             param_group["lr"] = lr * epoch / 50
 
 
-def train(model, graph, emb_layer, labels, train_idx, optimizer, n_classes, args):
+def train(epoch, model, graph, emb_layer, labels, train_idx, optimizer, n_classes, evaluator, args):    
     model.train()
 
     if args.use_tt:
@@ -78,7 +81,7 @@ def train(model, graph, emb_layer, labels, train_idx, optimizer, n_classes, args
     else:
         ids = th.arange(graph.number_of_nodes()).to(labels.device)
         feat = emb_layer(ids)
-
+    
     if args.use_labels:
         mask_rate = 0.5
         mask = th.rand(train_idx.shape) < mask_rate
@@ -99,7 +102,17 @@ def train(model, graph, emb_layer, labels, train_idx, optimizer, n_classes, args
     loss.backward()
     optimizer.step()
 
-    return loss, pred
+    acc = compute_acc(pred[train_idx], labels[train_idx], evaluator)
+    gpu_mem_alloc = th.cuda.max_memory_allocated() / 1000000 if th.cuda.is_available() else 0
+    
+    if args.logging:
+        log.logger.debug('Epoch {:05d} | Loss {:.4f} | Train Acc {:.4f} | GPU {:.1f} MB'.format(
+            epoch, loss.item(), acc, gpu_mem_alloc))
+    else:
+        print('Epoch {:05d} | Loss {:.4f} | Train Acc {:.4f} | GPU {:.1f} MB'.format(
+            epoch, loss.item(), acc, gpu_mem_alloc))
+
+    return loss, pred, acc
 
 
 @th.no_grad()
@@ -133,6 +146,16 @@ def evaluate(model, graph, emb_layer, labels, train_idx, val_idx, test_idx, eval
 
 
 def run(args, device, data, evaluator, dist=None):
+
+    # Add logging
+    if args.logging:
+        saved_log_name = saved_log_path + 'gcn-{}-{}-{}.log'.format(args.dataset, args.batch, timestamp)
+        log = Logger(saved_log_name, level='debug')
+        log.logger.debug("[Running GraphSAGE Model == Hidden: {}, Layers: {} ==]".format(args.num_hidden, args.num_layers))
+        log.logger.debug("[Dataset: {}]".format(args.dataset))
+    else:
+        log = None
+
     # define model and optimizer
     train_idx, val_idx, test_idx, in_feats, labels, n_classes, nfeat, graph = data
 
@@ -155,7 +178,8 @@ def run(args, device, data, evaluator, dist=None):
                 sparse=False,
                 use_cache=False,
                 weight_dist="normal",
-                ) 
+                )
+
         if dist == 'eigen':
             eigen_vals, eigen_vecs = get_eigen(graph, in_feats, 'ogbn-arxiv')
             eigen_vecs = th.tensor(eigen_vecs * np.sqrt(eigen_vals).reshape((1, len(eigen_vals))), dtype=th.float32)
@@ -184,15 +208,17 @@ def run(args, device, data, evaluator, dist=None):
     embed_layer = embed_layer.to(device)
     graph = graph.to(device)
 
+    ### Model's params
     params = list(model.parameters()) + list(embed_layer.parameters())
     optimizer = optim.AdamW(params, lr=args.lr, weight_decay=args.wd)
     lr_scheduler = optim.lr_scheduler.ReduceLROnPlateau(
         optimizer, mode="min", factor=0.5, patience=100, verbose=True, min_lr=1e-3
     )
     
-    print(model)
-    print(embed_layer)
-    print(f"Number of params: {count_parameters(args, embed_layer, in_feats, n_classes)}")
+    ### Model info
+    # print(model)
+    # print(embed_layer)
+    # print(f"Number of params: {count_parameters(args, embed_layer, in_feats, n_classes)}")
 
     # training loop
     total_time = 0
@@ -206,8 +232,8 @@ def run(args, device, data, evaluator, dist=None):
 
         adjust_learning_rate(optimizer, args.lr, epoch)
 
-        loss, pred = train(model, graph, embed_layer, labels, train_idx, optimizer, n_classes, args)
-        acc = compute_acc(pred[train_idx], labels[train_idx], evaluator)
+        loss, pred, acc = train(epoch, model, graph, embed_layer, labels, train_idx, optimizer, n_classes, evaluator, args)
+        # acc = compute_acc(pred[train_idx], labels[train_idx], evaluator)
 
         train_acc, val_acc, test_acc, train_loss, val_loss, test_loss = evaluate(
             model, graph, embed_layer, labels, train_idx, val_idx, test_idx, evaluator, n_classes, args
@@ -218,6 +244,18 @@ def run(args, device, data, evaluator, dist=None):
         toc = time.time()
         total_time += toc - tic
 
+        if args.logging:
+            log.logger.info('Epoch Time(s): {:.4f}'.format(toc - tic))
+        else:
+            print('Epoch Time(s): {:.4f}'.format(toc - tic))
+        
+        # ## Get the embedding access counts
+        # if epoch == 1:
+        #     # Get access counts every epoch or less frequently as needed
+        #     access_counts = embed_layer.get_access_counts()
+        #     print(f"Access counts after epoch {epoch}: {access_counts}")
+        #     access_percentages = calculate_access_percentages(access_counts, plot_name=f"gcn_embaccess_{args.dataset}_{args.batch}.pdf")
+
         # if val_acc > best_val_acc:
         if val_loss < best_val_loss:
             best_val_loss = val_loss
@@ -225,6 +263,7 @@ def run(args, device, data, evaluator, dist=None):
             best_test_acc = test_acc
 
         if epoch % args.log_every == 0:
+
             print(f"Epoch: {epoch}/{args.epochs}")
             print(
                 f"Loss: {loss.item():.4f}, Acc: {acc:.4f}\n"
@@ -243,10 +282,15 @@ def run(args, device, data, evaluator, dist=None):
             np.save('gcn_full_emb_{}.npy'.format(n_running), emb)
             embed_layer.cuda()
 
-    print("*" * 50)
-    print(f"Average epoch time: {total_time / args.epochs}, Test acc: {best_test_acc}")
-    print(f"Number of params: {count_parameters(args, embed_layer, in_feats, n_classes)}")
-
+    if args.logging:
+        log.logger.info('Avg epoch time: {:.4f}'.format(total_time / args.epochs))
+        log.logger.info('Test acc {:.4f}'.format(best_test_acc))
+    
+    else:
+        # print("*" * 50)
+        print(f"Avg epoch time: {total_time / args.epochs}")
+        print(f"Test acc: {best_test_acc}")
+        # print(f"Number of params: {count_parameters(args, embed_layer, in_feats, n_classes)}")
 
     return best_test_acc
 
@@ -278,7 +322,6 @@ if __name__ == "__main__":
     best_test_acc = run(args, device, data, evaluator, dist=args.init)
     print('The Best Test Acc {:.4f}'.format(best_test_acc))
 
-    
     # for i in range(int(args.n_runs)):
     #     test_accs.append(run(args, device, data, i, evaluator, dist=args.init))
     #     print('Average test accuracy:', np.mean(test_accs), '±', np.std(test_accs))

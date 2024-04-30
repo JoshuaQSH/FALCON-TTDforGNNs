@@ -7,6 +7,8 @@ from dgl.nn.pytorch.utils import Identity
 from dgl.nn.functional import edge_softmax
 from dgl.utils import expand_as_pair
 
+import torch.nn.functional as F
+
 class Bias(nn.Module):
     def __init__(self, size):
         super().__init__()
@@ -19,7 +21,6 @@ class Bias(nn.Module):
 
     def forward(self, x):
         return x + self.bias
-
 
 class GCN(nn.Module):
     def __init__(self, in_feats, n_hidden, n_classes, n_layers, activation, dropout, use_linear):
@@ -193,7 +194,6 @@ class GATConv(nn.Module):
             if self._activation is not None:
                 rst = self._activation(rst)
             return rst
-
 
 class GAT(nn.Module):
     def __init__(
