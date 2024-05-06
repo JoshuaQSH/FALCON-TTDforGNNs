@@ -21,6 +21,18 @@ for l, (layer, block) in enumerate(zip(self.layers, blocks)):
     h = layer(block, (h, h_dst)) # h = layer(block, h_dst)
 ```
 
+## Prerequest
+
+- Mannaully install the correct torch+cuda version in `requirements.txt` and then try run `pip install -r requirements.txt`. 
+- Setup the custom cuda kernel:
+```shell
+$ cd FBTT
+$ python setup.py install
+
+$ cd Efficient_TT
+$ python setup.py install
+```
+
 ## How to run
 
 We recommand run the model with the `run_script.sh`, but to test each module, try run it seperately.
@@ -28,31 +40,31 @@ We recommand run the model with the `run_script.sh`, but to test each module, tr
 - With the scirpt:
 ```shell
 # Run with GraphSAGE, dataset: ogbn-products, FBTT
-./run_script fbtt
+$ ./run_script fbtt
 
 # Run with GCN, dataset: ogbn-arxiv, FBTT
-./run_script gcn
+$ ./run_script gcn
 
 # Run with GAT, dataset: ogbn-arxiv, FBTT
-./run_script gat
+$ ./run_script gat
 
 # To profile the model
-./run_script profile
+$ ./run_script profile
 
 # Run with three level partitioning
-./run_script partition
+$ ./run_script partition
 
 # Run with eff
-./run_script eff
+$ ./run_script eff
+
+# Run with GraphSAGE full-neighbour
+$ ./run_script fbtt-full
 ```
 
 - Without the script:
 ```
 # With the logs
 $ python3 sage_dgl_partition.py --use-sample --use-tt --epochs 2 --device "cuda:0" --logging
-
-# Tune the parameters
-$ python3 sage_dgl_partition.py --use-sample --use-tt --epochs 2 --device "cuda:0" --partition 20 --tt-rank "16,16" --p-shapes "125,140,140" --q-shapes "4,5,5" --batch 2048
 
 # With eff TT opt
 $ python3 sage_dgl_partition.py --use-sample --use-tt --epochs 2 --device "cuda:0" --partition 125 --tt-rank "16,16" --p-shapes "125,140,140" --q-shapes "4,5,5" --batch 2 --emb-name "eff"
@@ -74,13 +86,6 @@ $ ncu --metrics sass__inst_executed_shared_loads,sass__inst_executed_global_load
 
 ```
 
-```text
-##  Global and shared memory read/write
-dram__bytes.sum.peak_sustained,dram__bytes.sum.per_second,dram__bytes_read.sum,dram__bytes_read.sum,dram__sectors_read.sum,dram__sectors_write.sum,sass__inst_executed_shared_loads,sass__inst_executed_shared_stores,smsp__inst_executed_op_ldsm.sum,smsp__inst_executed_op_shared_atom.sum,smsp__inst_executed_op_global_red.sum
-
-##
-
-```
 
 ## Dataset
 
