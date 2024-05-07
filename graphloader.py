@@ -8,8 +8,57 @@ from torch_geometric.utils import add_self_loops, to_undirected
 from ogb.nodeproppred import DglNodePropPredDataset
 import dgl
 import numpy as np
+import matplotlib.pyplot as plt
+import community as community_louvain
+import pandas as pd
 
 import os
+
+def load_reddit(self_loop=True):
+    from dgl.data import RedditDataset
+
+    # load reddit data
+    data = RedditDataset(self_loop=self_loop)
+    g = data[0]
+    g.ndata['features'] = g.ndata.pop('feat')
+    g.ndata['labels'] = g.ndata.pop('label')
+    return g, data.num_classes
+
+def load_ogb(name, root='dataset'):
+    
+    print('load', name)
+    data = DglNodePropPredDataset(name=name, root=root)
+    print('finish loading', name)
+    splitted_idx = data.get_idx_split()
+    graph, labels = data[0]
+    labels = labels[:, 0]
+
+    graph.ndata['features'] = graph.ndata.pop('feat')
+    graph.ndata['labels'] = labels
+    in_feats = graph.ndata['features'].shape[1]
+    num_labels = len(th.unique(labels[th.logical_not(th.isnan(labels))]))
+
+    # Find the node IDs in the training, validation, and test set.
+    train_nid, val_nid, test_nid = splitted_idx['train'], splitted_idx['valid'], splitted_idx['test']
+    train_mask = th.zeros((graph.number_of_nodes(),), dtype=th.bool)
+    train_mask[train_nid] = True
+    val_mask = th.zeros((graph.number_of_nodes(),), dtype=th.bool)
+    val_mask[val_nid] = True
+    test_mask = th.zeros((graph.number_of_nodes(),), dtype=th.bool)
+    test_mask[test_nid] = True
+    graph.ndata['train_mask'] = train_mask
+    graph.ndata['val_mask'] = val_mask
+    graph.ndata['test_mask'] = test_mask
+    print('finish constructing', name)
+    return graph, num_labels
+
+def inductive_split(g):
+    """Split the graph into training graph, validation graph, and test graph by training
+    and validation masks.  Suitable for inductive models."""
+    train_g = g.subgraph(g.ndata['train_mask'])
+    val_g = g.subgraph(g.ndata['train_mask'] | g.ndata['val_mask'])
+    test_g = g
+    return train_g, val_g, test_g
 
 def dgl_graph_loader(target_dataset, root, device, args):
     # load data
@@ -29,6 +78,16 @@ def dgl_graph_loader(target_dataset, root, device, args):
     print("train idx shape (DGL): ", train_idx.shape)
     print("nfeat shape (DGL): ", nfeat.shape)
     print("labels shape (DGL): ", labels.shape)
+    print("degree (DGL): ", graph.in_degrees())
+
+    if args.plot:
+        plt.figure(figsize=(12, 6))
+        plt.plot(th.arange(len(graph.in_degrees())),  graph.in_degrees())
+        plt.xlabel('Node Index')
+        plt.ylabel('# degree')
+        plt.title('Graph Degree Distribution')
+        plt.grid(True)
+        plt.savefig("./figures/degree_distribution_{}.pdf".format(target_dataset))
 
     # # add self-loop - ogbn-arxiv
     # print(f"Total edges before adding self-loop {graph.number_of_edges()}")
@@ -46,7 +105,6 @@ def dgl_graph_loader(target_dataset, root, device, args):
             graph, labels, train_idx, val_idx, test_idx = dgl_partition(graph, labels, train_idx, val_idx, test_idx, args.partition)
         else:
             print("no graph partition")
-
         num_feat = th.arange(graph.number_of_nodes()).to(device)
         labels = labels.to(device)
 
@@ -99,16 +157,128 @@ def dgl_unpack_data(data, args):
 
     return train_loader, full_neighbor_loader, data
 
-def custom_reordering(graph):
-    degrees = graph.in_degrees().numpy()
-    # threshold for the degree settings
-    degree_threshold = np.percentile(degrees, 80) 
-    high_degree_vertex_indices = np.where(degrees >= degree_threshold)[0]
-    reordered_indices = np.concatenate((high_degree_vertex_indices,
-                                        np.setdiff1d(np.arange(graph.number_of_nodes()),
-                                        high_degree_vertex_indices)))
-    par_g = dgl.reorder_graph(graph, node_permute_algo='custom', permute_config={'nodes_perm': reordered_indices})
+def custom_reordering(graph, is_degree=True):
+    if is_degree:
+        degrees = graph.in_degrees().numpy()
+        # threshold for the degree settings
+        degree_threshold = np.percentile(degrees, 80) 
+        high_degree_vertex_indices = np.where(degrees >= degree_threshold)[0]
+        reordered_indices = np.concatenate((high_degree_vertex_indices,
+                                            np.setdiff1d(np.arange(graph.number_of_nodes()),
+                                            high_degree_vertex_indices)))
+        par_g = dgl.reorder_graph(graph, node_permute_algo='custom', permute_config={'nodes_perm': reordered_indices})
+    
+    # louvain and mertis
+    else:
+        node_perm, num_clusters, max_cluster = louvain_and_metis_reorder(graph, merege=None, plot_name=None)
+        par_g = dgl.reorder_graph(graph, node_permute_algo='custom', permute_config={'nodes_perm': node_perm})
+        
     return par_g
+
+# CPU 
+def louvain_and_metis_reorder(g, merge=None, plot_name=None):    
+    nx_g = g.to_networkx().to_undirected()
+    partition = community_louvain.best_partition(nx_g)
+    modularity_score = community_louvain.modularity(partition, nx_g)
+    partition_list = list(partition.items())
+    df = pd.DataFrame(partition_list, columns=['vertex', 'partition'])
+   
+    partition = df['partition'].to_numpy()
+    vertex = df['vertex'].to_numpy()
+    num_clusters = max(partition) + 1
+
+
+    # print(df)
+    print('modularity score', modularity_score)
+    print('number of clusters: ', num_clusters)
+
+    nodes_per_cluster = np.zeros(num_clusters)
+    for i in range(num_clusters):
+        nodes_per_cluster[i] = np.sum(partition == i)
+
+    print(nodes_per_cluster.astype(int))
+    print('total nodes = ', np.sum(nodes_per_cluster))
+
+    if plot_name is not None:
+        _ = plt.hist(nodes_per_cluster, bins='auto', log=True)
+        plt.title("Histogram of size of clusters in "+plot_name)
+        plt.savefig(plot_name + ".pdf")
+
+    node_perm = np.zeros(g.num_nodes())
+
+    # don't merge any clusters
+    if merge is None:    
+        max_cluster = max(nodes_per_cluster)
+        for i in range(num_clusters):
+            curr_nodes = np.sum(partition == i)
+            new_idx = np.arange(max_cluster * i, max_cluster * i + curr_nodes)
+            curr_idx = partition == i
+            node_perm[vertex[curr_idx]] = new_idx
+            print("->", new_idx)
+
+            subg = g.subgraph(nodes=vertex[curr_idx])
+            if curr_nodes > 100:
+                #  dgl.partition.metis_partition_assignment()
+                pids = dgl.partition.metis_partition_assignment(
+                    subg if subg.device == dgl.backend.cpu() else subg.to(dgl.backend.cpu()), 
+                    int(min(128, curr_nodes/2)))
+                pids = dgl.backend.asnumpy(pids)
+                start_idx = max_cluster * i
+                curr_pid = 0
+                metis_vertex = vertex[curr_idx]
+                while curr_pid < np.max(pids):
+                    metis_idx = pids == curr_pid
+                    new_idx = np.arange(start_idx, start_idx + int(np.sum(metis_idx)))
+                    node_perm[metis_vertex[metis_idx]] = new_idx
+                    curr_pid += 1
+                    start_idx += int(np.sum(metis_idx))
+
+        print('max = ', max_cluster)
+        print('node perm = ', node_perm.astype(int))
+        
+    return node_perm.astype(int), num_clusters, max_cluster
+
+def recursive_metis_reorder(graph, current_level, max_level, partition_list):
+    """
+    partition_list: [125, 140, 140]
+    current_level: 1
+    max_level: 3
+    """
+    if current_level > max_level:
+        return graph
+
+    # Use the number of partitions specified for the current level
+    partitions = partition_list[current_level - 1]
+    
+    reordered_graph = dgl.reorder_graph(graph, 'metis', permute_config={'k': partitions})
+    
+    return recursive_metis_reorder(reordered_graph, current_level + 1, max_level, partition_list)
+
+# A function to recursively partition a graph
+# num_parts: List [140, 140, 125], num_parts[2], num_parts[1], num_parts[0]
+def recursive_partition(graph, level, num_parts):
+    if level == 0:
+        return {f"level_{level}": graph}
+
+    partitions = dgl.metis_partition(graph, num_parts[level])
+    results = {}
+    for part_id, subgraph in partitions.items():
+        sub_partitions = recursive_partition(subgraph, level - 1, num_parts)
+        for key, value in sub_partitions.items():
+            results[f"level_{level}_part_{part_id}_{key}"] = value
+    return results
+
+def map_indices_to_partition(g, partition):
+    # Original indices of nodes in the partition
+    original_indices = partition.ndata['_ID']
+
+    # Mapping global masks to partition-specific masks
+    partition.ndata['train_mask'] = g.ndata['train_mask'][original_indices]
+    partition.ndata['val_mask'] = g.ndata['val_mask'][original_indices]
+    partition.ndata['test_mask'] = g.ndata['test_mask'][original_indices]
+    partition.ndata['label'] = g.ndata['label'][original_indices]
+
+    return partition
 
 def dgl_partition(graph, labels, train_idx, val_idx, test_idx, partition):
     graph.ndata['label'] = labels
@@ -124,18 +294,29 @@ def dgl_partition(graph, labels, train_idx, val_idx, test_idx, partition):
     graph.ndata['test_mask'] = th.tensor(test_mask)
 
     if partition != 0:
-        # Reorder
+        
         if partition == -1:
-            par_g = custom_reordering(graph)
+            partition_with_subgraph = False
+            if partition_with_subgraph:
+                result = []
+                print("Partition graph with multi-level METIS")
+                ### Subgraphs
+                par_g = recursive_partition(graph, level=2, num_parts=[2, 2, 2])
+                for part_id, part in par_g.items():
+                    result.append(map_indices_to_partition(graph, part))
+            else:
+                # par_g = custom_reordering(graph)
+                ### Reorder
+                print("Partition graph with multi-level METIS")
+                par_g = recursive_metis_reorder(graph, 1, 3, [125, 140, 140])
         elif partition == -2:
             print("Partition graph by rcmk")
             par_g = dgl.reorder_graph(graph, 'rcmk')
 
         else:
-            # print("Randomly permute the node order")
-            # nodes_perm = th.randperm(graph.num_nodes())
-            # par_g = dgl.reorder_graph(graph, 'custom', permute_config={'nodes_perm':nodes_perm})
-            
+            print("Randomly permute the node order first")
+            nodes_perm = th.randperm(graph.num_nodes())
+            par_g = dgl.reorder_graph(graph, 'custom', permute_config={'nodes_perm':nodes_perm})
             print("Partition graph by METIS into {} parts".format(partition))
             par_g = dgl.reorder_graph(graph, 'metis', permute_config={'k':partition})
 

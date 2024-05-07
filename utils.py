@@ -15,6 +15,8 @@ import timeit
 from collections import Counter
 from itertools import product, permutations, combinations
 
+import matplotlib.pyplot as plt
+
 def max_batch_size(model, device, dummy_input, init_batch_size):
     optimal_batch_size = init_batch_size
     while(optimal_batch_size):
@@ -155,6 +157,34 @@ class Logger(object):
         th.setFormatter(format_str)
         self.logger.addHandler(sh) 
         self.logger.addHandler(th)
+
+def plot_access_percentages(access_percentages, plot_name="emb_row_access.pdf"):
+    plt.figure(figsize=(12, 6))
+    plt.plot(torch.arange(len(access_percentages)), access_percentages)
+    plt.xlabel('Embedding Index')
+    plt.ylabel('Access Percentage')
+    plt.title('Access Percentage of Each Embedding')
+    plt.grid(True)
+    # plt.show()
+    plt.savefig(plot_name)
+
+def plot_cumulative_access_percentages(cumulative_percentages, plot_name="cumulative_access.pdf"):
+    plt.figure(figsize=(12, 6))
+    plt.plot(cumulative_percentages)
+    plt.xlabel('Number of Embeddings')
+    plt.ylabel('Cumulative Access Percentage')
+    plt.title('Cumulative Access Percentage of Embeddings')
+    plt.grid(True)
+    plt.savefig(plot_name)
+
+def calculate_access_percentages(access_counts, plot_name="emb_row_access.pdf"):
+    total_accesses = np.sum(access_counts.numpy())
+    # Convert to percentage
+    access_percentages = (access_counts / total_accesses) * 100
+    sorted_percentages = torch.sort(access_percentages, descending=True)[0]
+    cumulative_percentages = torch.cumsum(sorted_percentages, dim=0)
+    plot_cumulative_access_percentages(cumulative_percentages, plot_name=plot_name)
+    return access_percentages
 
 def gpu_timing(model, device, input_, repetitions=100):
     model_ = model.to(device)

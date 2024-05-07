@@ -7,13 +7,9 @@ import dgl.nn.pytorch as dglnn
 import tqdm
 
 import sys
-sys.path.insert(0, '/home/shenghao/FBTT-Embedding')
-from tt_embeddings_ops import TTEmbeddingBag
 from tt_utils import *
-
 from torch.utils.cpp_extension import load
-
-# sys.path.insert(0, '/home/shenghao/tensor-train-for-gcn/TT4GNN/Efficient_TT')
+from FBTT.tt_embeddings_ops import TTEmbeddingBag
 from Efficient_TT.efficient_tt import Eff_TTEmbedding
 
 # Eff_TT_embedding_cuda = load(name="efficient_tt_table", sources=[
@@ -21,6 +17,23 @@ from Efficient_TT.efficient_tt import Eff_TTEmbedding
 #     "/home/shenghao/tensor-train-for-gcn/TT4GNN/Efficient_TT/efficient_tt_cuda.cu", 
 #     ], verbose=True)
 
+
+class LoggingEmbedding(nn.Module):
+    def __init__(self, num_embeddings, embedding_dim):
+        super(LoggingEmbedding, self).__init__()
+        self.embedding = nn.Embedding(num_embeddings, embedding_dim)
+        self.access_counts = th.zeros(num_embeddings, dtype=th.long)
+
+    def forward(self, input):
+        self.log_accesses(input)
+        return self.embedding(input)
+    
+    def log_accesses(self, indices):
+        unique_indices, counts = indices.unique(return_counts=True)
+        self.access_counts[unique_indices] += counts
+
+    def get_access_counts(self):
+        return self.access_counts
 
 class SAGE(nn.Module):
     def __init__(self,
@@ -32,7 +45,9 @@ class SAGE(nn.Module):
                  activation,
                  dropout,
                  use_tt=False,
-                 tt_rank=16,
+                 tt_rank=[16,16],
+                 p_shapes=None,
+                 q_shapes=None,
                  dist=None,
                  graph=None,
                  device='cpu',
@@ -55,42 +70,45 @@ class SAGE(nn.Module):
         self.device = th.device(device)
         self.embed_name = embed_name
 
-        if use_tt:
-            if in_feats == 128:
-                q_shapes = [8, 4, 4]
-            else:
-                q_shapes = None
-            p_shapes = [125, 140, 140]
-            # p_shapes = None
+        if use_tt and device != 'cpu':
+            # if in_feats == 128:
+            #     q_shapes = [8, 4, 4]
+            # elif in_feats == 100:
+            #     q_shapes = [5, 5, 4]
+            # else:
+            #     q_shapes = None
+            # p_shapes = [125, 140, 140]
+            
             if device is not 'cpu':
                 if self.embed_name == "fbtt":
                     print("Using FBTT")
                     self.embed_layer = TTEmbeddingBag(
                             num_embeddings=num_nodes,
                             embedding_dim=in_feats,
-                            tt_ranks=[tt_rank, tt_rank],
-                            tt_p_shapes=p_shapes,
-                            tt_q_shapes=q_shapes,
+                            tt_ranks=tt_rank,
+                            tt_p_shapes=p_shapes, # The factorization of num_embeddings
+                            tt_q_shapes=q_shapes, # Same as the in_feats
                             sparse=False,
                             use_cache=False,
                             weight_dist="normal",
                             )
                 # TODO: hardcoded for the batch_size - default 1024
-                elif self.embed_name == "eff_tt":
+                elif self.embed_name == "eff":
                     print("Using Efficient TT")
                     self.embed_layer = Eff_TTEmbedding(
                         num_embeddings = num_nodes,
                         embedding_dim = in_feats,
                         tt_p_shapes=p_shapes,
                         tt_q_shapes=q_shapes,
-                        tt_ranks = [tt_rank, tt_rank],
+                        tt_ranks = tt_rank,
                         weight_dist = "uniform",
-                        batch_size = 258
+                        batch_size = 12
                     ).to(self.device)
                 else:
                     print("Unknown embedding type")
             else:
                 self.embed_layer = th.nn.Embedding(num_nodes, in_feats)
+                # self.embed_layer = LoggingEmbedding(num_nodes, in_feats)
                        
             if dist == 'eigen':
                 eigen_vals, eigen_vecs = get_eigen(graph, in_feats, name='ogbn-products')
@@ -100,23 +118,25 @@ class SAGE(nn.Module):
 
                 tt_cores, _ = tt_matrix_decomp(
                         emb_pad,
-                        [1, tt_rank, tt_rank, 1],
+                        [1, tt_rank[0], tt_rank[1], 1],
                         p_shapes,
                         [4, 5, 5]
                     )
                 for i in range(3):
                     self.embed_layer.tt_cores[i].data = tt_cores[i].to(self.device)
+
+            # TODO: init Here
             elif dist == 'ortho':
                 print("initialized from orthogonal cores")
                 tt_cores = get_ortho(
-                    [1, tt_rank, tt_rank, 1],
+                    [1, tt_rank[0], tt_rank[1], 1],
                     p_shapes,
                     [4, 5, 5]
                 )
                 # TODO: initialized the tt_cores weights
                 for i in range(3):
-                    pass
-                    # self.embed_layer.tt_cores[i].data = th.tensor(tt_cores[i]).to(device)
+                    self.embed_layer.tt_cores[i].data = th.tensor(tt_cores[i]).to(device)
+                    
             elif dist == 'dortho':
                 print('initialized from decomposing orthogonal matrix')
                 rand_A = np.random.random(size=(125 * 140 * 140, 100)).astype(np.float32)
@@ -125,7 +145,7 @@ class SAGE(nn.Module):
 
                 tt_cores, _ = tt_matrix_decomp(
                         emb_w,
-                        [1, tt_rank, tt_rank, 1],
+                        [1, tt_rank[0], tt_rank[1], 1],
                         p_shapes,
                         [4, 5, 5]
                     )
@@ -133,19 +153,22 @@ class SAGE(nn.Module):
                     self.embed_layer.tt_cores[i].data = tt_cores[i].to(self.device)
 
         else:
-            self.embed_layer = th.nn.Embedding(num_nodes, in_feats)   
-          
+            print("Using CPU with torch Embedding")
+            self.embed_layer = th.nn.Embedding(num_nodes, in_feats)
+            # self.embed_layer = LoggingEmbedding(num_nodes, in_feats) 
 
     def forward(self, blocks, input_nodes):
-        #h = x
-        if self.use_tt:
+        # h = x
+        if self.use_tt and self.device != 'cpu':
             offsets = th.arange(input_nodes.shape[0] + 1).to(self.device)
             input_nodes = input_nodes.to(self.device)
-
+            
             h = self.embed_layer(input_nodes, offsets)
+        elif self.device == 'cpu':
+            h = self.embed_layer(input_nodes.to(self.device))
         else:
             h = self.embed_layer(input_nodes.to(self.device))
-
+        
         for l, (layer, block) in enumerate(zip(self.layers, blocks)):
             # We need to first copy the representation of nodes on the RHS from the
             # appropriate nodes on the LHS.

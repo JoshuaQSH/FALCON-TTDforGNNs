@@ -59,6 +59,7 @@ def parse_args():
     parser.add_argument('--save-pred', type=str, default='')
     parser.add_argument('--wd', type=float, default=0)
     parser.add_argument('--workspace', type=str, default='')
+    parser.add_argument('--access-counts', action="store_true", help="Whether to count the access times of embeddings.")
     
     parser.add_argument("--n-runs", type=int, default=1)
     parser.add_argument("--store-emb", action="store_true", help="Store training embedding")
