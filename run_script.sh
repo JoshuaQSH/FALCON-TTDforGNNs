@@ -3,7 +3,7 @@
 BATCHSIZE=2048
 PARTITION=0
 
-EPOCHS=10
+EPOCHS=1
 RUN_TEST=$@
 CUDA="cuda:0"
 DATASET="ogbn-arxiv"
@@ -65,7 +65,7 @@ quest1=(
     "smsp__inst_executed_op_shared_atom.sum",
     "smsp__inst_executed_op_global_red.sum")
 
-for item in "${inst[@]}";do
+for item in "${quest1[@]}";do
 	PROFILE+="$item"
 done
 
@@ -88,31 +88,48 @@ then
         done
     done
 
-elif [ $RUN_TEST = "profile" ]
+elif [ $RUN_TEST = "profile-gcn" ]
 then
-    echo "-----Running with profiling-----"
-    # python3 sage_profiler.py --use-sample --use-tt --epochs $EPOCHS --device "cuda:0" --partition 0 --tt-rank "16,16" --p-shapes "125,140,140" --q-shapes "4,5,5" --batch 2048 --emb-name "fbtt" $WORKSPACE
-
-    # ncu --set roofline -f -o sage_fbtt_roofline python3 sage_dgl_partition_.py --use-sample --use-tt --epochs 1 --device "cuda:1" --partition 0 --tt-rank "16,16" --p-shapes "125,140,140" --q-shapes "4,5,5" --batch 2048 --emb-name "fbtt"
-    
-    ### --launch-count 1 --launch-skip 4
-    ncu --metrics $PROFILE -f -o gcn_fbtt \
+    echo "-----Running with profiling (GCN)-----"
+    ### --launch-count 1 --launch-skip 4    
+    ncu --target-processes all -f -o gcn_fbtt_adam \
         python3 gcn_gat_partition.py \
         --use-sample \
         --use-tt \
-        --epochs 3 \
+        --epochs 10 \
         --batch $BATCHSIZE \
-        --device "cuda:0" \
+        --device "cuda:1" \
         --partition $PARTITION \
         --model gcn \
-        --tt-rank "16,16" \n
+        --tt-rank "16,16" \
         --p-shapes "125,140,140" \
         --q-shapes "4,4,8" \
         --batch 2048 \
         --emb-name "fbtt" \
         --dataset $DATASET \
         --use-labels \
-        --use-linear
+        --use-linear \
+        --logging
+
+elif [ $RUN_TEST = "profile-sage" ]
+then
+    echo "-----Running with profiling (GraphSAGE)-----"    
+    ### --launch-count 1 --launch-skip 4
+    ### --set roofline
+    ### --target-processes all
+    ncu --metrics $PROFILE -f -o sage_fbtt \
+        python3 sage_dgl_partition.py \
+        --use-sample \
+        --use-tt \
+        --epochs 1 \
+        --batch $BATCHSIZE \
+        --device $CUDA \
+        --partition $PARTITION \
+        --model sage \
+        --tt-rank "16,16" \
+        --p-shapes "125,140,140" \
+        --q-shapes "4,5,5" \
+        --emb-name "fbtt" \
 
     # nsys profile --stats=true -o sage_fbtt_nsys --force-overwrite true \
     #     python3 sage_dgl_partition.py \
@@ -207,8 +224,8 @@ then
 elif [ $RUN_TEST = "gcn" ]
 then
     echo "-----Running with GCN (${DATASET} in Full Batch) ----- "
-    python3 gcn_gat_partition.py --epochs $EPOCHS --device $CUDA --partition $PARTITION --tt-rank "16,16" --p-shapes "125,140,140" --q-shapes "4,4,8" --emb-name "fbtt" --dataset $DATASET --use-labels --use-linear --model gcn
-    # python3 gcn_gat_partition.py --use-tt --epochs $EPOCHS --device $CUDA --partition $PARTITION --tt-rank "16,16" --p-shapes "125,140,140" --q-shapes "4,4,8" --emb-name "eff" --dataset $DATASET --use-labels --use-linear --model gcn
+    python3 gcn_gat_partition.py --use-tt --epochs $EPOCHS --device $CUDA --partition $PARTITION --tt-rank "16,16" --p-shapes "125,140,140" --q-shapes "4,4,8" --emb-name "fbtt" --dataset $DATASET --use-labels --use-linear --model gcn $WORKSPACE
+    # python3 gcn_gat_partition.py --use-tt --epochs $EPOCHS --device $CUDA --partition $PARTITION --tt-rank "16,16" --p-shapes "125,140,140" --q-shapes "4,4,8" --emb-name "eff" --dataset $DATASET --use-labels --use-linear --model gcn $WORKSPACE
 
 elif [ $RUN_TEST = "gat" ]
 then

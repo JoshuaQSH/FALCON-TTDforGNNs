@@ -35,7 +35,7 @@ $ python setup.py install
 
 ## How to run
 
-We recommand run the model with the `run_script.sh`, but to test each module, try run it seperately.
+We recommand run the model with the `run_script.sh`, but to test each module, try run it seperately. Note: if you failed with the profiling with "Failed to open/create lock file (path)", try: `sudo sysctl fs.protected_regular=0` to allow other users to access the `tmp` directory or simply use a different temporary directory.
 
 - With the scirpt:
 ```shell
