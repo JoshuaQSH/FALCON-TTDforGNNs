@@ -3,7 +3,7 @@
 BATCHSIZE=2048
 PARTITION=0
 
-EPOCHS=1
+EPOCHS=10
 RUN_TEST=$@
 CUDA="cuda:0"
 DATASET="ogbn-arxiv"
@@ -168,38 +168,53 @@ then
     ### products
     # python3 sage_dgl_partition.py --use-sample --epochs $EPOCHS --device "cpu" --partition $PARTITION --batch $BATCHSIZE --dataset "ogbn-products"
     # python3 sage_dgl_partition.py --use-sample --epochs 5 --device "cpu" --partition $PARTITION --batch $BATCHSIZE --dataset "ogbn-products" --logging
-    python3 sage_dgl_partition.py --use-sample --epochs 2 --device "cpu" --partition $PARTITION --batch 1 --dataset "ogbn-products"
+    # python3 sage_dgl_partition.py --use-sample --epochs 2 --device "cpu" --partition $PARTITION --batch 1 --dataset "ogbn-products"
 
     ### arxiv
     # python3 sage_dgl_partition.py --epochs $EPOCHS --device "cpu" --partition $PARTITION --batch 1 --dataset "ogbn-arxiv" --logging
 
     ### papers
-    # python3 sage_dgl_partition.py --epochs $EPOCHS --device "cpu" --partition $PARTITION --batch 5 --dataset "ogbn-papers100M" --logging
+    python3 sage_dgl_partition.py --epochs $EPOCHS --device "cpu" --partition $PARTITION --batch 5 --dataset "ogbn-papers100M"
     
     ### proteins
     # python3 sage_dgl_partition.py --use-sample --epochs $EPOCHS --device "cpu" --partition $PARTITION --batch $BATCHSIZE --dataset "ogbn-proteins"
 
-elif [ $RUN_TEST = "fbtt" ]
+elif [ $RUN_TEST = "fbtt-products" ]
 then
-    echo "-----Running with FBTT-----"
-    # python3 sage_dgl_partition.py --use-sample --use-tt --epochs $EPOCHS --device $CUDA --partition $PARTITION --tt-rank "16,16" --p-shapes "125,140,140" --q-shapes "4,5,5" --batch $BATCHSIZE --emb-name "fbtt" --dataset "ogbn-products"
+    echo "-----Running with FBTT (ogbn-products)-----"
     # compute-sanitizer --tool memcheck python3 sage_dgl_partition.py --use-sample --use-tt --epochs $EPOCHS --device $CUDA --partition $PARTITION --tt-rank "16,16" --p-shapes "50,80,100" --q-shapes "4,4,8" --batch $BATCHSIZE --emb-name "fbtt" --dataset "ogbn-arxiv"
-    # python3 sage_dgl_partition.py --use-sample --epochs $EPOCHS --device $CUDA --partition $PARTITION --tt-rank "16,16" --p-shapes "50,80,100" --q-shapes "4,4,8" --batch $BATCHSIZE --emb-name "fbtt" --dataset "ogbn-arxiv"
-
-    # python3 sage_dgl_partition.py --use-sample --fan-out '2,5,10' --epochs $EPOCHS --device $CUDA --partition $PARTITION --tt-rank "16,16" --p-shapes "125,140,140" --q-shapes "4,4,8" --batch $BATCHSIZE --emb-name "fbtt" --dataset "ogbn-products"
     python3 sage_dgl_partition.py --use-sample \
+        --use-tt \
         --fan-out '3,5,15' \
         --epochs $EPOCHS \
         --device $CUDA \
         --partition $PARTITION \
         --tt-rank "16,16" \
         --p-shapes "125,140,140" \
-        --q-shapes "4,4,8" \
+        --q-shapes "4,5,5" \
         --batch $BATCHSIZE \
         --emb-name "fbtt" \
         --num-layers 3 \
         --num-hidden 256 \
         --dataset "ogbn-products"
+
+elif [ $RUN_TEST = "fbtt-papers" ]
+then
+    echo "-----Running with FBTT (ogbn-papers100M)-----"
+    python3 sage_dgl_partition.py --use-sample \
+        --use-tt \
+        --fan-out '3,5,15' \
+        --epochs $EPOCHS \
+        --device $CUDA \
+        --partition $PARTITION \
+        --tt-rank "16,16" \
+        --p-shapes "400,640,740" \
+        --q-shapes "4,4,8" \
+        --batch 256 \
+        --emb-name "fbtt" \
+        --num-layers 3 \
+        --num-hidden 256 \
+        --dataset "ogbn-papers100M"
 
 elif [ $RUN_TEST = "fbtt4090" ]
 then
@@ -224,7 +239,7 @@ then
 elif [ $RUN_TEST = "gcn" ]
 then
     echo "-----Running with GCN (${DATASET} in Full Batch) ----- "
-    python3 gcn_gat_partition.py --use-tt --epochs $EPOCHS --device $CUDA --partition $PARTITION --tt-rank "16,16" --p-shapes "125,140,140" --q-shapes "4,4,8" --emb-name "fbtt" --dataset $DATASET --use-labels --use-linear --model gcn $WORKSPACE
+    python3 gcn_gat_partition.py --use-tt --epochs $EPOCHS --device $CUDA --partition $PARTITION --tt-rank "16,16" --p-shapes "125,140,140" --q-shapes "4,4,8" --emb-name "fbtt" --dataset $DATASET --use-labels --use-linear --model gcn
     # python3 gcn_gat_partition.py --use-tt --epochs $EPOCHS --device $CUDA --partition $PARTITION --tt-rank "16,16" --p-shapes "125,140,140" --q-shapes "4,4,8" --emb-name "eff" --dataset $DATASET --use-labels --use-linear --model gcn $WORKSPACE
 
 elif [ $RUN_TEST = "gat" ]

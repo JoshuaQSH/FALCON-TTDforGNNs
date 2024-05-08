@@ -40,7 +40,10 @@ We recommand run the model with the `run_script.sh`, but to test each module, tr
 - With the scirpt:
 ```shell
 # Run with GraphSAGE, dataset: ogbn-products, FBTT
-$ ./run_script fbtt
+$ ./run_script fbtt-products
+
+# Run with GraphSAGE, dataset: ogbn-papers100M, FBTT
+$ ./run_script fbtt-papers
 
 # Run with GCN, dataset: ogbn-arxiv, FBTT
 $ ./run_script gcn
@@ -48,8 +51,11 @@ $ ./run_script gcn
 # Run with GAT, dataset: ogbn-arxiv, FBTT
 $ ./run_script gat
 
-# To profile the model
-$ ./run_script profile
+# To profile the model - GCN
+$ ./run_script profile-gcn
+
+# To profile the model - GraphSAGE
+$ ./run_script profile-sage
 
 # Run with three level partitioning
 $ ./run_script partition
