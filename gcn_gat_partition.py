@@ -10,6 +10,7 @@ import dgl
 import scipy
 import numpy as np
 import torch as th
+import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 from matplotlib import pyplot as plt
@@ -25,6 +26,9 @@ from utils import Logger, gpu_timing, memory_usage, calculate_access_percentages
 # sys.path.insert(0, '/home/shenghao/home-3090/FBTT-Embedding')
 # from tt_embeddings_ops import TTEmbeddingBag
 from FBTT.tt_embeddings_ops import TTEmbeddingBag
+from Efficient_TT.efficient_tt import Eff_TTEmbedding
+# from Efficient_TT.breakdown.efficient_tt import Eff_TTEmbedding
+
 
 
 # device = None
@@ -32,6 +36,7 @@ from FBTT.tt_embeddings_ops import TTEmbeddingBag
 
 # GCN so far
 def gen_model(args, in_feats, n_classes):
+    model = None
     if args.model == 'gcn': 
         if args.use_labels:
             model = GCN(
@@ -52,6 +57,12 @@ def cross_entropy(x, labels):
     y = th.log(epsilon + y) - math.log(epsilon)
     return th.mean(y)
 
+def BCE(x, labels):
+    m = nn.Sigmoid()
+    x = th.argmax(m(x),dim=1)
+    loss_fn = nn.BCELoss(reduction="mean")
+    y = loss_fn(x.type(th.FloatTensor), labels.type(th.FloatTensor))
+    return y
 
 def compute_acc(pred, labels, evaluator):
     return evaluator.eval({"y_pred": pred.argmax(dim=-1, keepdim=True), "y_true": labels.unsqueeze(1)})["acc"]
@@ -71,9 +82,14 @@ def adjust_learning_rate(optimizer, lr, epoch):
             param_group["lr"] = lr * epoch / 50
 
 
-def train(epoch, model, graph, emb_layer, labels, train_idx, optimizer, n_classes, evaluator, args):    
+def train(epoch, model, graph, emb_layer, labels, train_idx, optimizer, n_classes, evaluator, train_loader, log, args):    
+    
+    # For the throughput testing
+    ave_forward_throughput=[]
+    ave_backward_throughput=[]
+    tic_step = time.time()
+    seeds = th.arange(graph.number_of_nodes()).to(labels.device)
     model.train()
-
     if args.use_tt:
         ids = th.arange(graph.number_of_nodes()).to(labels.device)
         offsets = th.arange(graph.number_of_nodes() + 1).to(labels.device)
@@ -97,22 +113,38 @@ def train(epoch, model, graph, emb_layer, labels, train_idx, optimizer, n_classe
         train_pred_idx = train_idx[mask]
 
     optimizer.zero_grad()
+
+
+    # Model forward
+    # FBTT pred - torch.Size([169343, 40])
+    # Eff pred - torch.Size([169343, 40])
     pred = model(graph, feat)
+
+    # Forward throughput
+    fwd_throughput = len(seeds)/(time.time()-tic_step)
+
     loss = cross_entropy(pred[train_pred_idx], labels[train_pred_idx])
+    # loss = BCE(pred[train_pred_idx], labels[train_pred_idx])
+
     loss.backward()
     optimizer.step()
+
+    # Backward throughput
+    bwd_throughput = len(seeds)/(time.time()-tic_step)
 
     acc = compute_acc(pred[train_idx], labels[train_idx], evaluator)
     gpu_mem_alloc = th.cuda.max_memory_allocated() / 1000000 if th.cuda.is_available() else 0
     
-    if args.logging:
-        log.logger.debug('Epoch {:05d} | Loss {:.4f} | Train Acc {:.4f} | GPU {:.1f} MB'.format(
-            epoch, loss.item(), acc, gpu_mem_alloc))
-    else:
-        print('Epoch {:05d} | Loss {:.4f} | Train Acc {:.4f} | GPU {:.1f} MB'.format(
-            epoch, loss.item(), acc, gpu_mem_alloc))
+    iter_tput_per_epoch = len(seeds) / (time.time() - tic_step)
 
-    return loss, pred, acc
+    if args.logging:
+        log.logger.debug('Epoch {:05d} | Loss {:.4f} | Train Acc {:.4f} | Speed (samples/sec) {:.4f} | GPU {:.1f} MB'.format(
+            epoch, loss.item(), acc, iter_tput_per_epoch, gpu_mem_alloc))
+    else:
+        print('Epoch {:05d} | Loss {:.4f} | Train Acc {:.4f} | Speed (samples/sec) {:.4f} | GPU {:.1f} MB'.format(
+            epoch, loss.item(), acc, iter_tput_per_epoch, gpu_mem_alloc))
+
+    return loss, pred, acc, fwd_throughput, bwd_throughput, iter_tput_per_epoch
 
 
 @th.no_grad()
@@ -145,11 +177,16 @@ def evaluate(model, graph, emb_layer, labels, train_idx, val_idx, test_idx, eval
     )
 
 
-def run(args, device, data, evaluator, dist=None):
+def run(args, device, data, train_loader, evaluator, dist=None):
 
     # Add logging
+    # Setup the saved log file, with time and filename
+    saved_log_path = './logs/profile/'
+    start_time = int(round(time.time()*1000))
+    timestamp = time.strftime('%Y%m%d-%H%M%S',time.localtime(start_time/1000))
+
     if args.logging:
-        saved_log_name = saved_log_path + 'gcn-{}-{}-{}.log'.format(args.dataset, args.batch, timestamp)
+        saved_log_name = saved_log_path + '{}-{}-{}-{}.log'.format(args.model, args.dataset, args.batch, timestamp)
         log = Logger(saved_log_name, level='debug')
         log.logger.debug("[Running GraphSAGE Model == Hidden: {}, Layers: {} ==]".format(args.num_hidden, args.num_layers))
         log.logger.debug("[Dataset: {}]".format(args.dataset))
@@ -169,16 +206,33 @@ def run(args, device, data, evaluator, dist=None):
         p_shapes = [int(i) for i in args.p_shapes.split(',')]
         q_shapes = [int(i) for i in args.q_shapes.split(',')]
 
-        embed_layer = TTEmbeddingBag(
-                num_embeddings=graph.number_of_nodes(),
-                embedding_dim=in_feats,
-                tt_ranks=tt_rank,
-                tt_p_shapes=p_shapes,
-                tt_q_shapes=q_shapes,
-                sparse=False,
-                use_cache=False,
-                weight_dist="normal",
-                )
+        if args.emb_name == "fbtt":
+            print("Using FBTT")
+            embed_layer = TTEmbeddingBag(
+                    num_embeddings=graph.number_of_nodes(),
+                    embedding_dim=in_feats,
+                    tt_ranks=tt_rank,
+                    tt_p_shapes=p_shapes,
+                    tt_q_shapes=q_shapes,
+                    sparse=False,
+                    use_cache=False,
+                    weight_dist="normal",
+                    )
+
+        elif args.emb_name == "eff":
+            print("Using Efficient TT")
+            # eff_tag == 0: both efficient
+            # eff_tag == 1: forward TT, backward efficient
+            # eff_tag == 2: forward efficient, backward TT
+            embed_layer = Eff_TTEmbedding(
+                    num_embeddings = graph.number_of_nodes(),
+                    embedding_dim = in_feats,
+                    tt_p_shapes=p_shapes,
+                    tt_q_shapes=q_shapes,
+                    tt_ranks = tt_rank,
+                    weight_dist = "uniform",
+                    batch_size = 12
+                    ).to(device)
 
         if dist == 'eigen':
             eigen_vals, eigen_vecs = get_eigen(graph, in_feats, 'ogbn-arxiv')
@@ -211,6 +265,8 @@ def run(args, device, data, evaluator, dist=None):
     ### Model's params
     params = list(model.parameters()) + list(embed_layer.parameters())
     optimizer = optim.AdamW(params, lr=args.lr, weight_decay=args.wd)
+    # optimizer = optim.SGD(params, lr=args.lr, weight_decay=args.wd)
+
     lr_scheduler = optim.lr_scheduler.ReduceLROnPlateau(
         optimizer, mode="min", factor=0.5, patience=100, verbose=True, min_lr=1e-3
     )
@@ -223,6 +279,7 @@ def run(args, device, data, evaluator, dist=None):
     # training loop
     total_time = 0
     best_val_acc, best_test_acc, best_val_loss = 0, 0, float("inf")
+    iter_tput, ave_fwd_throughput, ave_bwd_throughput = [], [], []
 
     accs, train_accs, val_accs, test_accs = [], [], [], []
     losses, train_losses, val_losses, test_losses = [], [], [], []
@@ -232,8 +289,13 @@ def run(args, device, data, evaluator, dist=None):
 
         adjust_learning_rate(optimizer, args.lr, epoch)
 
-        loss, pred, acc = train(epoch, model, graph, embed_layer, labels, train_idx, optimizer, n_classes, evaluator, args)
+        loss, pred, acc, fwd_throughput, bwd_throughput, iter_tput_per_epoch = train(epoch, model, graph, embed_layer, labels, train_idx, optimizer, n_classes, evaluator, train_loader, log, args)
         # acc = compute_acc(pred[train_idx], labels[train_idx], evaluator)
+
+        # Record the throughput
+        ave_fwd_throughput.append(fwd_throughput)
+        ave_bwd_throughput.append(bwd_throughput)
+        iter_tput.append(iter_tput_per_epoch)
 
         train_acc, val_acc, test_acc, train_loss, val_loss, test_loss = evaluate(
             model, graph, embed_layer, labels, train_idx, val_idx, test_idx, evaluator, n_classes, args
@@ -249,27 +311,19 @@ def run(args, device, data, evaluator, dist=None):
         else:
             print('Epoch Time(s): {:.4f}'.format(toc - tic))
         
-        # ## Get the embedding access counts
-        # if epoch == 1:
-        #     # Get access counts every epoch or less frequently as needed
-        #     access_counts = embed_layer.get_access_counts()
-        #     print(f"Access counts after epoch {epoch}: {access_counts}")
-        #     access_percentages = calculate_access_percentages(access_counts, plot_name=f"gcn_embaccess_{args.dataset}_{args.batch}.pdf")
-
         # if val_acc > best_val_acc:
         if val_loss < best_val_loss:
             best_val_loss = val_loss
             best_val_acc = val_acc
             best_test_acc = test_acc
 
-        if epoch % args.log_every == 0:
-
-            print(f"Epoch: {epoch}/{args.epochs}")
-            print(
-                f"Loss: {loss.item():.4f}, Acc: {acc:.4f}\n"
-                f"Train/Val/Test loss: {train_loss:.4f}/{val_loss:.4f}/{test_loss:.4f}\n"
-                f"Train/Val/Test/Best val/Best test acc: {train_acc:.4f}/{val_acc:.4f}/{test_acc:.4f}/{best_val_acc:.4f}/{best_test_acc:.4f}"
-            )
+        # if epoch % args.log_every == 0:
+        #     print(f"Epoch: {epoch}/{args.epochs}")
+        #     print(
+        #         f"Loss: {loss.item():.4f}, Acc: {acc:.4f}\n"
+        #         f"Train/Val/Test loss: {train_loss:.4f}/{val_loss:.4f}/{test_loss:.4f}\n"
+        #         f"Train/Val/Test/Best val/Best test acc: {train_acc:.4f}/{val_acc:.4f}/{test_acc:.4f}/{best_val_acc:.4f}/{best_test_acc:.4f}"
+        #     )
 
         for l, e in zip(
             [accs, train_accs, val_accs, test_accs, losses, train_losses, val_losses, test_losses],
@@ -280,16 +334,24 @@ def run(args, device, data, evaluator, dist=None):
         if epoch == args.epochs and args.store_emb:
             emb = np.array(embed_layer.cpu().weight.data)
             np.save('gcn_full_emb_{}.npy'.format(n_running), emb)
-            embed_layer.cuda()
+            embed_layer.to(device)
 
     if args.logging:
         log.logger.info('Avg epoch time: {:.4f}'.format(total_time / args.epochs))
+        log.logger.info('End2End Time(s): {:.4f}'.format(total_time))
+        log.logger.info('Avg forward throughput is {:.4f}'.format(np.mean(ave_fwd_throughput)))
+        log.logger.info('Avg backward throughput is {:.4f}'.format(np.mean(ave_bwd_throughput)))
+        log.logger.info('Avg overall throughput is {:.4f}'.format(np.mean(iter_tput[2:])))
         log.logger.info('Test acc {:.4f}'.format(best_test_acc))
     
     else:
-        # print("*" * 50)
         print(f"Avg epoch time: {total_time / args.epochs}")
+        print('End2End Time(s): {:.4f}'.format(total_time))
+        print('Avg forward throughput is {:.4f}'.format(np.mean(ave_fwd_throughput)))
+        print('Avg backward throughput is {:.4f}'.format(np.mean(ave_bwd_throughput)))
+        print('Avg overall throughput is {:.4f}'.format(np.mean(iter_tput[2:])))
         print(f"Test acc: {best_test_acc}")
+
         # print(f"Number of params: {count_parameters(args, embed_layer, in_feats, n_classes)}")
 
     return best_test_acc
@@ -313,13 +375,16 @@ if __name__ == "__main__":
     
     # load ogbn-products data - dgl version
     target_dataset = args.dataset
-    root = os.path.join(os.environ['HOME'], args.workspace, 'gnn_related', 'dataset')
+    if args.dataset_dir == None:
+        root = os.path.join(os.environ['HOME'], args.workspace, 'gnn_related', 'dataset')
+    else:
+        root = args.dataset_dir
     
     train_loader, full_neighbor_loader, data = dgl_graph_loader(target_dataset, root, device, args)
     print('Init from {}'.format(args.init))
     evaluator = Evaluator(name=target_dataset)
     
-    best_test_acc = run(args, device, data, evaluator, dist=args.init)
+    best_test_acc = run(args, device, data, train_loader, evaluator, dist=args.init)
     print('The Best Test Acc {:.4f}'.format(best_test_acc))
 
     # for i in range(int(args.n_runs)):

@@ -12,11 +12,12 @@ from ogb.nodeproppred import DglNodePropPredDataset
 
 import os
 from tt_utils import *
-from utils import Logger, gpu_timing, memory_usage
+from utils import Logger, gpu_timing, memory_usage, calculate_access_percentages, plot_access_percentages
 
 from dgl_sage import SAGE
 from graphloader import dgl_graph_loader
 
+os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'max_split_size_mb:32'
 
 def compute_acc(pred, labels):
     """
@@ -48,6 +49,12 @@ def load_subtensor(nfeat, labels, seeds, input_nodes):
     batch_labels = labels[seeds]
     return batch_inputs, batch_labels
 
+'''
+Graph(num_nodes=2449029, num_edges=123718280,
+      ndata_schemes={'feat': Scheme(shape=(100,), dtype=torch.float32), 'label': Scheme(shape=(1,), dtype=torch.int64)}
+      edata_schemes={})
+can be partitioned and sampled
+'''
 def train(train_loader, model, loss_fcn, optimizer, lr_scheduler, nfeat, labels, device, epoch, args, iter_tput, log=None):
     # Loop over the dataloader to sample the computation dependency graph as a list of blocks.
     
@@ -66,7 +73,6 @@ def train(train_loader, model, loss_fcn, optimizer, lr_scheduler, nfeat, labels,
         batch_inputs, batch_labels = load_subtensor(nfeat, labels, seeds, input_nodes)
         # batch_inputs = batch_inputs.to(device)
         batch_labels = batch_labels.to(device)
-
         # Compute loss and prediction
         batch_pred = model(blocks, batch_inputs)
         loss = loss_fcn(batch_pred, batch_labels)
@@ -77,10 +83,10 @@ def train(train_loader, model, loss_fcn, optimizer, lr_scheduler, nfeat, labels,
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
+
         # Backward throughput
         bwd_throughput= len(seeds)/(time.time()-tic_step)
         ave_backward_throughput.append(bwd_throughput)
-
         lr_scheduler.step(loss)
         iter_tput.append(len(seeds) / (time.time() - tic_step))
         if step % args.log_every == 0:
@@ -100,14 +106,18 @@ def run(train_loader, full_neighbor_loader, data, args):
     # Logging
     start_time = int(round(time.time()*1000))
     timestamp = time.strftime('%Y%m%d-%H%M%S',time.localtime(start_time/1000))
-    
     # Setup the saved log file, with time and filename
-    saved_log_path = './logs/'
+    saved_log_path = './logs/partition_related/'
     if args.use_sample:
         is_sample = 'sample'
     else:
         is_sample = 'full'
-    saved_log_name = saved_log_path + '{}-{}-{}-{}-batch-{}-par-{}-{}.log'.format(args.model, args.device, is_sample, args.fan_out, args.batch, args.partition, timestamp)
+    # saved_log_name = saved_log_path + '{}-{}-{}-{}-batch-{}-par-{}-{}.log'.format(args.model, args.device, is_sample, args.fan_out, args.batch, args.partition, timestamp)
+    # saved_log_name = saved_log_path + 'TTRank-{}-{}.log'.format(args.tt_rank, timestamp)
+    # saved_log_name = saved_log_path + 'DiffRankPshape-{}-{}-{}.log'.format(args.tt_rank, args.p_shapes, timestamp)
+    # saved_log_name = saved_log_path + 'Partition-{}-{}.log'.format(args.partition, timestamp)
+    saved_log_name = saved_log_path + 'MotiTest-{}-{}-{}.log'.format(args.dataset, args.batch, timestamp)
+
     if args.logging:
         log = Logger(saved_log_name, level='debug')
         log.logger.debug("[Running GraphSAGE Model == Hidden: {}, Layers: {} ==]".format(args.num_hidden, args.num_layers))
@@ -129,7 +139,9 @@ def run(train_loader, full_neighbor_loader, data, args):
         activation = F.relu, 
         dropout = args.dropout, 
         use_tt = args.use_tt, 
-        tt_rank = args.tt_rank, 
+        tt_rank = [int(i) for i in args.tt_rank.split(',')],
+        p_shapes = [int(i) for i in args.p_shapes.split(',')],
+        q_shapes = [int(i) for i in args.q_shapes.split(',')],
         dist = args.init, 
         graph = g, 
         device = args.device,
@@ -166,7 +178,15 @@ def run(train_loader, full_neighbor_loader, data, args):
             log.logger.info('Epoch Time(s): {:.4f}'.format(toc - tic))
         else:
             print('Epoch Time(s): {:.4f}'.format(toc - tic))
-        
+
+        if epoch == 1 and args.access_counts:
+            # Get access counts every epoch or less frequently as needed
+            access_counts = model.embed_layer.get_access_counts()
+            print(f"Access counts after epoch {epoch}: {access_counts}")
+            access_percentages = calculate_access_percentages(access_counts, plot_name=f"embaccess_{args.dataset}_{args.batch}.pdf")
+            # print(f"Access percentages after epoch {epoch}: {access_percentages}")
+            # plot_access_percentages(access_percentages, plot_name=f"emb_row_access_epoch_{epoch}.pdf")
+
         if epoch >= 5:
             avg += toc - tic
         if epoch % args.eval_every == 0 and epoch != 0:
@@ -206,12 +226,17 @@ def run(train_loader, full_neighbor_loader, data, args):
         log.logger.info('Avg forward throughput is {:.4f}'.format(ave_fwd_throughput))
         log.logger.info('Avg backward throughput is {:.4f}'.format(ave_bwd_throughput))
         log.logger.info('Avg overall throughput is {:.4f}'.format(np.mean(iter_tput[5:])))
+        log.logger.info('TT Ranks: {}'.format(args.tt_rank))
+        log.logger.info('Partitions: {}'.format(args.partition))
+        
     else:
         print('Avg epoch time: {:.4f}'.format(total_time / args.epochs))
         print('End2End Time(s): {:.4f}'.format(total_time))
         print('Avg forward throughput is {:.4f}'.format(ave_fwd_throughput))
         print('Avg backward throughput is {:.4f}'.format(ave_bwd_throughput))
         print('Avg overall throughput is {:.4f}'.format(np.mean(iter_tput[5:])))
+        print('TT Ranks: {}'.format(args.tt_rank))
+        print('Partitions: {}'.format(args.partition))
 
     return best_test_acc
         
@@ -219,14 +244,18 @@ def run(train_loader, full_neighbor_loader, data, args):
 if __name__ == '__main__':
     args = parse_args()
     
-    if args.device == 'cuda':
-        device = th.device('cuda:0')
+    if args.device != 'cpu' and th.cuda.is_available():
+        device = th.device(args.device)
     else:
         device = th.device('cpu')
 
     # load ogbn-products data - dgl version
+    # /home/shenghao/gnn_related/dataset
     target_dataset = args.dataset
-    root = os.path.join(os.environ['HOME'], 'gnn_related', 'dataset')
+    if args.dataset_dir == None:
+        root = os.path.join(os.environ['HOME'], args.workspace, 'gnn_related', 'dataset')
+    else:
+        root = args.dataset_dir
     
     train_loader, full_neighbor_loader, data = dgl_graph_loader(target_dataset, root, device, args)
     print('Init from {}'.format(args.init))

@@ -40,31 +40,34 @@ We recommand run the model with the `run_script.sh`, but to test each module, tr
 - With the scirpt:
 ```shell
 # Run with GraphSAGE, dataset: ogbn-products, FBTT
-$ ./run_script fbtt-products
+$ ./run_script.sh fbtt-products
 
 # Run with GraphSAGE, dataset: ogbn-papers100M, FBTT
-$ ./run_script fbtt-papers
+$ ./run_script.sh fbtt-papers
+
+# To compare the origin, also run w/o TTD
+$ ./run_script.sh origin-papers
 
 # Run with GCN, dataset: ogbn-arxiv, FBTT
-$ ./run_script gcn
+$ ./run_script.sh gcn
 
 # Run with GAT, dataset: ogbn-arxiv, FBTT
-$ ./run_script gat
+$ ./run_script.sh gat
 
 # To profile the model - GCN
-$ ./run_script profile-gcn
+$ ./run_script.sh profile-gcn
 
 # To profile the model - GraphSAGE
-$ ./run_script profile-sage
+$ ./run_script.sh profile-sage
 
 # Run with three level partitioning
-$ ./run_script partition
+$ ./run_script.sh partition
 
 # Run with eff
-$ ./run_script eff
+$ ./run_script.sh eff
 
 # Run with GraphSAGE full-neighbour
-$ ./run_script fbtt-full
+$ ./run_script.sh fbtt-full
 ```
 
 - Without the script:
