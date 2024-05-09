@@ -7,6 +7,7 @@ EPOCHS=10
 RUN_TEST=$@
 CUDA="cuda:0"
 DATASET="ogbn-arxiv"
+DATASETDIR="/home/shenghao/gnn_related/dataset"
 PROFILE=""
 WORKSPACE='--workspace home-3090'
 # WORKSPACE=''
@@ -196,7 +197,23 @@ then
         --emb-name "fbtt" \
         --num-layers 3 \
         --num-hidden 256 \
-        --dataset "ogbn-products"
+        --dataset "ogbn-products" \
+        --dataset-dir $DATASETDIR
+
+elif [ $RUN_TEST = "origin-papers" ]
+then
+     echo "-----Running with GraphSAGE ogbn-papers100M-----"
+     python3 sage_dgl_partition.py --use-sample \
+        --fan-out '3,5,15' \
+        --epochs $EPOCHS \
+        --device $CUDA \
+        --partition $PARTITION \
+        --batch $BATCHSIZE \
+        --emb-name "fbtt" \
+        --num-layers 3 \
+        --num-hidden 256 \
+        --dataset "ogbn-papers100M" \
+        --dataset-dir $DATASETDIR
 
 elif [ $RUN_TEST = "fbtt-papers" ]
 then
@@ -210,11 +227,12 @@ then
         --tt-rank "16,16" \
         --p-shapes "400,640,740" \
         --q-shapes "4,4,8" \
-        --batch 256 \
+        --batch $BATCHSIZE \
         --emb-name "fbtt" \
         --num-layers 3 \
         --num-hidden 256 \
-        --dataset "ogbn-papers100M"
+        --dataset "ogbn-papers100M" \
+        --dataset-dir $DATASETDIR
 
 elif [ $RUN_TEST = "fbtt4090" ]
 then
@@ -239,8 +257,8 @@ then
 elif [ $RUN_TEST = "gcn" ]
 then
     echo "-----Running with GCN (${DATASET} in Full Batch) ----- "
-    python3 gcn_gat_partition.py --use-tt --epochs $EPOCHS --device $CUDA --partition $PARTITION --tt-rank "16,16" --p-shapes "125,140,140" --q-shapes "4,4,8" --emb-name "fbtt" --dataset $DATASET --use-labels --use-linear --model gcn
-    # python3 gcn_gat_partition.py --use-tt --epochs $EPOCHS --device $CUDA --partition $PARTITION --tt-rank "16,16" --p-shapes "125,140,140" --q-shapes "4,4,8" --emb-name "eff" --dataset $DATASET --use-labels --use-linear --model gcn $WORKSPACE
+    # python3 gcn_gat_partition.py --use-tt --epochs $EPOCHS --device $CUDA --partition $PARTITION --tt-rank "16,16" --p-shapes "125,140,140" --q-shapes "4,4,8" --emb-name "fbtt" --dataset $DATASET --use-labels --use-linear --model gcn
+    python3 gcn_gat_partition.py --use-tt --epochs $EPOCHS --device $CUDA --partition $PARTITION --tt-rank "16,16" --p-shapes "125,140,140" --q-shapes "4,4,8" --emb-name "eff" --dataset $DATASET --use-labels --use-linear --model gcn
 
 elif [ $RUN_TEST = "gat" ]
 then
@@ -251,7 +269,7 @@ then
 elif [ $RUN_TEST = "eff" ]
 then
     echo "-----Running with Efficient TT-----"
-    python3 sage_dgl_partition.py --use-sample --use-tt --epochs $EPOCHS --device $CUDA --partition -1 --tt-rank "16,16" --p-shapes "125,140,140" --q-shapes "4,5,5" --batch $BATCHSIZE --emb-name "eff"
+    python3 sage_dgl_partition.py --use-sample --use-tt --epochs $EPOCHS --device $CUDA --partition 0 --tt-rank "16,16" --p-shapes "125,140,140" --q-shapes "4,5,5" --batch $BATCHSIZE --emb-name "eff"
 
 else
     echo "No test specified. Exiting..."
