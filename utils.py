@@ -1,4 +1,5 @@
 import torch
+import torch.nn as nn
 import os
 from torch import Tensor    
 
@@ -159,6 +160,9 @@ class Logger(object):
         self.logger.addHandler(th)
 
 def plot_access_percentages(access_percentages, plot_name="emb_row_access.pdf"):
+    plt.rc('xtick', labelsize=20) 
+    plt.rc('ytick', labelsize=20) 
+    plt.rcParams.update({'font.size': 22})
     plt.figure(figsize=(12, 6))
     plt.plot(torch.arange(len(access_percentages)), access_percentages)
     plt.xlabel('Embedding Index')
@@ -166,16 +170,19 @@ def plot_access_percentages(access_percentages, plot_name="emb_row_access.pdf"):
     plt.title('Access Percentage of Each Embedding')
     plt.grid(True)
     # plt.show()
-    plt.savefig(plot_name)
+    plt.savefig(plot_name,dpi=1500)
 
 def plot_cumulative_access_percentages(cumulative_percentages, plot_name="cumulative_access.pdf"):
+    plt.rc('xtick', labelsize=20) 
+    plt.rc('ytick', labelsize=20) 
+    plt.rcParams.update({'font.size': 22})
     plt.figure(figsize=(12, 6))
     plt.plot(cumulative_percentages)
     plt.xlabel('Number of Embeddings')
     plt.ylabel('Cumulative Access Percentage')
     plt.title('Cumulative Access Percentage of Embeddings')
     plt.grid(True)
-    plt.savefig(plot_name)
+    plt.savefig(plot_name,dpi=1500)
 
 def calculate_access_percentages(access_counts, plot_name="emb_row_access.pdf"):
     total_accesses = np.sum(access_counts.numpy())

@@ -21,8 +21,10 @@ LICENSE file in the root directory of this source tree.
 #include "cub/device/device_radix_sort.cuh"
 #include "hashtbl_cuda_utils.cuh"
 #include "tt_cuda_utils.cuh"
+#include <iostream>
 
 using namespace at;
+using namespace std;
 
 namespace {
 
@@ -1024,6 +1026,8 @@ Tensor tt_embeddings_forward_cuda(
   for (int32_t start_idx = 0; start_idx < nnz; start_idx += batch_count) {
     int32_t end_idx =
         start_idx + batch_count < nnz ? start_idx + batch_count : nnz;
+    // cout << "start_idx: " << start_idx << " end_idx : " << end_idx << "\n";
+    // cout << "batch count: " << batch_count << "\n";
     int32_t N = end_idx - start_idx;
     init_batch_gemm_forward_cuda(
         T,
@@ -1113,6 +1117,7 @@ void update_cache_state_cuda(Tensor colidx, Tensor hashtbl, Tensor cache_freq) {
       cache_freq.data_ptr<int64_t>());
 }
 
+// TODO: add a hit/miss track for caching
 __global__ void mark_popular_colidx_kernel(
     int32_t hashtbl_size,
     int32_t cache_size,
@@ -1129,13 +1134,16 @@ __global__ void mark_popular_colidx_kernel(
         cache_freq_sorted_hashtbl[n], hashtbl_size, MAX_PROBES, hashtbl);
     if (n < cache_size) {
       cache_state[hashtbl_idx] = n;
+      // atomicAdd(&hit_counter[0], 1); // increment hit counter
     } else {
       hashtbl[hashtbl_idx] = -1;
       cache_freq[hashtbl_idx] = 0;
+      // atomicAdd(&miss_counter[0], 1);  // Increment miss counter
     }
   } else if (n < cache_size) {
     // a hack to use batch gemm
     cache_freq_sorted_hashtbl[n] = 0;
+    // atomicAdd(&miss_counter[0], 1);  // Treat as a miss if not used
   }
 }
 
@@ -1275,6 +1283,7 @@ void cache_populate_cuda(
   TORCH_CHECK(hashtbl.numel() >= cache_weight.size(0));
 
   auto cache_freq_sorted_hashtbl = empty_like(hashtbl);
+  
   // Sort hash_table by cache_freq
   {
     auto sorted_cache_freq = empty_like(cache_freq);

@@ -151,6 +151,7 @@ class TTLookupFunction(torch.autograd.Function):
         cache_optimizer_state: torch.Tensor,
         cache_weight: torch.Tensor,
         optimizer_state: List[torch.Tensor],
+        batch_count: int,
         *tt_cores: Tuple[torch.Tensor],
     ) -> torch.Tensor:
         ctx.tt_p_shapes = tt_p_shapes
@@ -165,7 +166,9 @@ class TTLookupFunction(torch.autograd.Function):
         ctx.optimizer_state = optimizer_state
         ctx.nnz_tt = nnz_tt
         ctx.nnz_cached = nnz_cached
-        batch_count = 1000
+        ctx.batch_count = batch_count
+        # TODO: BATCHCOUNT
+        # batch_count = 14000
         ctx.save_for_backward(
             L,
             indices,
@@ -175,7 +178,9 @@ class TTLookupFunction(torch.autograd.Function):
             cache_optimizer_state,
             cache_weight,
         )
+        
         # pyre-fixme[16]
+        # print("Forward Batch count: ", batch_count) 
         output = tt_embeddings.tt_forward(
             batch_count,
             ctx.tt_cores[0].size(0),  # num_tables
@@ -216,7 +221,10 @@ class TTLookupFunction(torch.autograd.Function):
             cache_optimizer_state,
             cache_weight,
         ) = ctx.saved_tensors
-        batch_count = 1000
+        # TODO: BATCHCOUNT
+        batch_count = ctx.batch_count
+        # batch_count = 14000
+        # print("Backward Batch count: ", batch_count) 
         if ctx.sparse:
             if ctx.optimizer in [OptimType.SGD, OptimType.EXACT_SGD]:
                 # pyre-fixme[16]
@@ -298,6 +306,7 @@ class TTLookupFunction(torch.autograd.Function):
                     None,  # cache_optimizer_state
                     None,  # cache_weight
                     None,  # optimizer_state
+                    None, # batch_count
                 ]
                 + [None] * len(ctx.tt_cores)
             )
@@ -351,6 +360,7 @@ class TTLookupFunction(torch.autograd.Function):
                     None,  # cache_optimizer_state
                     d_cache_weight,  # cache_weight
                     None,  # optimizer_state
+                    None, # batch_count
                 ]
                 + d_tt_cores
             )
@@ -450,6 +460,7 @@ class TableBatchedTTEmbeddingBag(torch.nn.Module):
         hashtbl_size: int = 0,
         weight_dist: str = "approx-normal",
         enforce_embedding_dim: bool = False,
+        batch_count: int = 1000,
     ) -> None:
         super(TableBatchedTTEmbeddingBag, self).__init__()
         assert torch.cuda.is_available()
@@ -457,6 +468,7 @@ class TableBatchedTTEmbeddingBag(torch.nn.Module):
         assert num_embeddings > 0
         assert embedding_dim > 0
         assert num_tables == 1 or not use_cache, "cannot use cache when num_tables != 1"
+        self.batch_count = batch_count
         self.tt_p_shapes: List[int] = (
             suggested_tt_shapes(num_embeddings, len(tt_ranks) + 1)
             if tt_p_shapes is None
@@ -506,6 +518,8 @@ class TableBatchedTTEmbeddingBag(torch.nn.Module):
         )
         L = []
         L_value = 1
+        
+        # L: [P1*P2, P2, 1]
         for t in range(self.tt_ndim):
             L.append(L_value)
             L_value *= self.tt_p_shapes[self.tt_ndim - t - 1]
@@ -543,9 +557,10 @@ class TableBatchedTTEmbeddingBag(torch.nn.Module):
             )
         self.reset_parameters(weight_dist)
         self.use_cache = use_cache
+        
         if use_cache:
             if cache_size <= 0:
-                cache_size = int(0.1 * self.num_embeddings)
+                cache_size = int(0.01 * self.num_embeddings)
             if hashtbl_size <= 0:
                 hashtbl_size = self.num_embeddings
             assert hashtbl_size >= cache_size
@@ -810,7 +825,7 @@ class TableBatchedTTEmbeddingBag(torch.nn.Module):
                 self.hashtbl,
                 self.cache_freq,
                 self.cache_state,
-                self.cache_weight,
+                self.cache_weight
             )
             self.warmup = False
 
@@ -827,7 +842,12 @@ class TableBatchedTTEmbeddingBag(torch.nn.Module):
         # update hash table and lfu state
         self.update_cache(indices)
 
-        # preprocess indices
+        # partitioned_colidx,
+        # partitioned_rowidx,
+        # tableidx,
+        # N_tt_indices,
+        # partitioned_cache_locations
+        ### preprocess indices
         (
             indices,
             rowidx,
@@ -845,8 +865,15 @@ class TableBatchedTTEmbeddingBag(torch.nn.Module):
             # pyre-fixme[16]
             self.cache_state,
         )
+
+        # The number of the cached indices
+        # @indices: the input_nodes
+        # @num_tt_indices: the number of TT indices needed to TTD
         num_cached = indices.numel() - num_tt_indices
+
+        # print("num_cached: ", num_cached)
         # pyre-fixme[16]
+
         output = TTLookupFunction.apply(
             # self.num_tables should be able to divide offsets.numel() - 1
             (offsets.numel() - 1) // self.num_tables,
@@ -869,9 +896,10 @@ class TableBatchedTTEmbeddingBag(torch.nn.Module):
             self.cache_optimizer_state,
             self.cache_weight,
             list(self.optimizer_state),
+            self.batch_count,
             *(self.tt_cores),
         )
-
+        
         return output
 
     def set_learning_rate(self, lr: float) -> None:
@@ -908,6 +936,7 @@ class TTEmbeddingBag(TableBatchedTTEmbeddingBag):
         hashtbl_size: int = 0,
         weight_dist: str = "approx-normal",
         enforce_embedding_dim: bool = False,
+        batch_count: int = 1000,
     ) -> None:
         super().__init__(
             1,  # num_tables = 1
@@ -925,6 +954,7 @@ class TTEmbeddingBag(TableBatchedTTEmbeddingBag):
             hashtbl_size,
             weight_dist,
             enforce_embedding_dim,
+            batch_count,
         )
 
     def forward(

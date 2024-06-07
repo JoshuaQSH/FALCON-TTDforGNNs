@@ -6,6 +6,7 @@ import torch.nn.functional as F
 import dgl.nn.pytorch as dglnn
 import tqdm
 
+import torch
 import sys
 from tt_utils import *
 from torch.utils.cpp_extension import load
@@ -51,7 +52,12 @@ class SAGE(nn.Module):
                  dist=None,
                  graph=None,
                  device='cpu',
-                 embed_name ='fbtt'):
+                 embed_name ='fbtt',
+                 access_counts=False,
+                 use_cached=False,
+                 cache_size=0,
+                 sparse=False,
+                 batch_count=1000):
         super().__init__()
         self.n_layers = n_layers
         self.n_hidden = n_hidden
@@ -70,27 +76,40 @@ class SAGE(nn.Module):
         self.device = th.device(device)
         self.embed_name = embed_name
 
-        if use_tt and device != 'cpu':
-            # if in_feats == 128:
-            #     q_shapes = [8, 4, 4]
-            # elif in_feats == 100:
-            #     q_shapes = [5, 5, 4]
-            # else:
-            #     q_shapes = None
-            # p_shapes = [125, 140, 140]
-            
-            if device is not 'cpu':
+        self.access_counts = access_counts
+        self.use_cached = use_cached
+        self.batch_count = batch_count
+
+        # cache map
+        if self.use_cached:
+            # default: 10% of the embeddings (num_nodes, also known as num_embeddings)
+            self.cache_size = int(0.1 * cache_size * num_nodes)
+            # default: num_embeddings
+            self.hashtbl_size = num_nodes
+        else:
+            self.cache_size = 0
+            self.hashtbl_size = 0
+        
+        self.cache = TensorCache(cache_size, in_feats, self.device)
+        
+        if use_tt and device != 'cpu':            
+            if device != 'cpu':
                 if self.embed_name == "fbtt":
                     print("Using FBTT")
+                    print("---- num_embeddings: ", num_nodes)
+                    print("---- embedding_dim: ", in_feats)
                     self.embed_layer = TTEmbeddingBag(
                             num_embeddings=num_nodes,
                             embedding_dim=in_feats,
                             tt_ranks=tt_rank,
                             tt_p_shapes=p_shapes, # The factorization of num_embeddings
                             tt_q_shapes=q_shapes, # Same as the in_feats
-                            sparse=False,
-                            use_cache=False,
+                            sparse=sparse,
+                            use_cache=self.use_cached,
+                            cache_size=self.cache_size,
+                            hashtbl_size=self.hashtbl_size,
                             weight_dist="normal",
+                            batch_count=self.batch_count,
                             )
                 # TODO: hardcoded for the batch_size - default 1024
                 elif self.embed_name == "eff":
@@ -102,14 +121,11 @@ class SAGE(nn.Module):
                         tt_q_shapes=q_shapes,
                         tt_ranks = tt_rank,
                         weight_dist = "uniform",
-                        batch_size = 12
+                        batch_size = 1024
                     ).to(self.device)
                 else:
-                    print("Unknown embedding type")
-            else:
-                self.embed_layer = th.nn.Embedding(num_nodes, in_feats)
-                # self.embed_layer = LoggingEmbedding(num_nodes, in_feats)
-                       
+                    print("Unknown embedding type")                                
+            
             if dist == 'eigen':
                 eigen_vals, eigen_vecs = get_eigen(graph, in_feats, name='ogbn-products')
                 eigen_vecs = th.tensor(eigen_vecs * np.sqrt(eigen_vals).reshape((1, len(eigen_vals))), dtype=th.float32)
@@ -151,23 +167,60 @@ class SAGE(nn.Module):
                     )
                 for i in range(3):
                     self.embed_layer.tt_cores[i].data = tt_cores[i].to(self.device)
-
+            else:
+                print("No initialization for weights")
+        
+        # A cpu version will call nn.Embedding, with or withhout the access counts
         else:
-            print("Using CPU with torch Embedding")
-            self.embed_layer = th.nn.Embedding(num_nodes, in_feats)
-            # self.embed_layer = LoggingEmbedding(num_nodes, in_feats) 
+            if self.access_counts:
+                print("Logging Embedding and counting access")
+                self.embed_layer = LoggingEmbedding(num_nodes, in_feats)
+                    
+            else:
+                print("Using CPU with torch Embedding")
+                self.embed_layer = th.nn.Embedding(num_nodes, in_feats)   
+    
+    # A torch level cache for embedding lookup
+    def embedding_lookup(self, node_ids, offsets):
+        embeddings = []
+        for idx, node_id in enumerate(node_ids):
+            cached_embedding = self.cache.get(node_id.item())
+            if cached_embedding is None:
+                computed_embedding = self.embed_layer(node_ids[idx:idx+1], torch.tensor([0, 1], device=self.device))
+                self.cache.put(node_id.item(), computed_embedding)
+                embeddings.append(computed_embedding)
+            else:
+                embeddings.append(cached_embedding)
+        return th.stack(embeddings, dim=0).squeeze(1)
+    
+    def embedding_lookup_cpu(self, node_ids):
+        embeddings = [] 
+        for node_id in node_ids:
+            embedding = self.cache.get(node_id.item())
+            if embedding is None:
+                embedding = self.embed_layer(node_id)
+                self.cache.put(node_id.item(), embedding)
+            embeddings.append(embedding)
+        return th.stack(embeddings)
 
     def forward(self, blocks, input_nodes):
         # h = x
-        if self.use_tt and self.device != 'cpu':
+        if self.use_tt and self.device.type != 'cpu':
             offsets = th.arange(input_nodes.shape[0] + 1).to(self.device)
             input_nodes = input_nodes.to(self.device)
             
-            h = self.embed_layer(input_nodes, offsets)
-        elif self.device == 'cpu':
-            h = self.embed_layer(input_nodes.to(self.device))
-        else:
-            h = self.embed_layer(input_nodes.to(self.device))
+            if self.use_cached:
+                h = self.embed_layer(input_nodes, offsets)
+                # h = self.embedding_lookup(input_nodes, offsets)
+            else:
+                h = self.embed_layer(input_nodes, offsets)
+
+        elif self.device.type == 'cpu':
+            if self.use_cached:
+                # h = self.embed_layer(input_nodes.to(self.device))
+                h = self.embedding_lookup_cpu(input_nodes.to(self.device))
+            else:
+                h = self.embed_layer(input_nodes.to(self.device))
         
         for l, (layer, block) in enumerate(zip(self.layers, blocks)):
             # We need to first copy the representation of nodes on the RHS from the
@@ -191,7 +244,7 @@ class SAGE(nn.Module):
         The inference code is written in a fashion that it could handle any number of nodes and
         layers.
         """
-        if self.use_tt:
+        if self.use_tt and device.type != 'cpu':
             ids = th.arange(g.num_nodes()).to(device)
             offsets = th.arange(g.num_nodes() + 1).to(device)
             x = self.embed_layer(ids.to(device), offsets)

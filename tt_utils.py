@@ -10,6 +10,8 @@ from tt_embeddings_ops import TTEmbeddingBag
 from tt_embeddings_ops import tt_matrix_to_full
 import torch.nn.init as init
 
+from collections import OrderedDict
+
 import argparse
 
 def parse_args():
@@ -31,7 +33,10 @@ def parse_args():
     # ["ogbn-arxiv", "ogbn-products", "ogbn-proteins", "ogbn-papers100M"]
     parser.add_argument('--dataset', type=str, default="ogbn-products", help='Dataset (default: "ogbn-products")')
     parser.add_argument('--use-sample', action="store_true", default=False, help='Whether to sample the dataset (default: False)')
-    parser.add_argument('--num-workers', type=int, default=4, help="Number of sampling processes. Use 0 for no extra process.")
+    parser.add_argument('--num-workers', type=int, default=0, help="Number of sampling processes. Use 0 for no extra process.")
+    parser.add_argument('--dist', action="store_true", help="distributes both data and computation across a collection of computation resources.")
+    parser.add_argument('--mode', default="mixed", choices=["mixed", "puregpus"], help="Training mode (default: mixed), mixed for CPU-GPU, puregpus for GPU only.")
+    parser.add_argument('--num-gpus', type=str, default="0", help="Number of GPUs to use, should be in list, e.g. '0,1,2,3'")
 
     # GNN layers related
     parser.add_argument('--num-hidden', type=int, default=256)
@@ -43,7 +48,6 @@ def parse_args():
     # TT
     parser.add_argument('--fan-out', type=str, default='5,10,15')
     parser.add_argument("--use-tt", action="store_true", default=False, help="Use tt-emb layer. Whether to use TT format (default: False). ")
-    # parser.add_argument("--tt-rank", type=int, default=8)
     parser.add_argument("--partition", type=int, default=0, help="-1 for customized permute, >0 for METIS, ==0 for -2 for rcmk")
     parser.add_argument('--init', type=str, default="ortho")
     parser.add_argument('--emb-name', type=str, default="fbtt")
@@ -51,6 +55,9 @@ def parse_args():
     parser.add_argument('--tt-rank', type=str, default="16,16", help='The ranks of TT cores')
     parser.add_argument('--p-shapes', type=str, default="125,140,140", help='The product of all elements is not smaller than num_embeddings.')
     parser.add_argument('--q-shapes', type=str, default="5,5,4", help='The product of all elements is equal to embedding_dim.')
+    parser.add_argument('--cache-size', type=int, default=0, help='The caching percentage, should be [0, 10).')
+    parser.add_argument('--batch-count', type=int, default=1000, help='Batch Count for TT.')
+    parser.add_argument('--sparse', action="store_true", default=False, help="Weight fusion for TT.")
     
     # Extra parts
     parser.add_argument('--val-batch-size', type=int, default=10000)
@@ -61,6 +68,8 @@ def parse_args():
     parser.add_argument('--workspace', type=str, default='')
     parser.add_argument('--dataset-dir', type=str, default=None)
     parser.add_argument('--access-counts', action="store_true", help="Whether to count the access times of embeddings.")
+    parser.add_argument('--use-cached', action="store_true", help="Caching the embeddings.")
+    parser.add_argument('--skip-eval', action="store_true", help="Skip the evaluation part. (profiling only)")
     
     parser.add_argument("--n-runs", type=int, default=1)
     parser.add_argument("--store-emb", action="store_true", help="Store training embedding")
@@ -145,7 +154,6 @@ def get_ortho(tt_ranks, tt_p_shapes, tt_q_shapes):
     return tt_cores
 
 def tt_matrix_decomp(matrix, tt_ranks, tt_p_shapes, tt_q_shapes):
-    # breakpoint()
     dims = [tt_p_shapes[i] * tt_q_shapes[i] for i in range(3)]
     tensor = np.reshape(matrix, tt_p_shapes + tt_q_shapes)
     tensor = np.transpose(tensor, (0, 3, 1, 4, 2, 5))
@@ -190,3 +198,80 @@ def tt_matrix_decomp(matrix, tt_ranks, tt_p_shapes, tt_q_shapes):
     cores.append(th.tensor(new_core, dtype=th.float))
 
     return cores, ranks
+
+# class for LRU, deprecated
+class LRUCache:
+    def __init__(self, capacity: int, device='cpu'):
+        self.cache = OrderedDict()
+        self.capacity = capacity
+        self.device = device
+        self.hits = 0
+        self.misses = 0
+
+    def get(self, key):
+        if key in self.cache:
+            # marks the item as recently used
+            self.cache.move_to_end(key)
+            self.hits += 1
+            return self.cache[key]
+        else:
+            self.misses += 1
+            return None
+
+    def put(self, key, value):
+        if key in self.cache:
+            self.cache.move_to_end(key)
+        elif len(self.cache) >= self.capacity:
+            # remove least recently used item
+            self.cache.popitem(last=False)  
+        self.cache[key] = value.to(self.device)
+
+    def stats(self):
+        return {"hits": self.hits, "misses": self.misses}
+
+
+class TensorCache:
+    def __init__(self, capacity, embedding_dim, device='cpu'):
+        self.capacity = capacity
+        self.device = device
+        # node IDs
+        self.keys = -th.ones(capacity, dtype=th.long, device=device)
+        # values for embeddings
+        self.values = th.zeros(capacity, embedding_dim, dtype=th.float32, device=device)
+        # Tracks access times with LRU
+        self.access_time = th.zeros(capacity, dtype=th.long, device=device)
+        # Global time counter
+        self.time = 0
+        # To record the hit/misses
+        self.hits = 0
+        self.misses = 0
+
+    def get(self, key):
+        self.time += 1
+        loc = (self.keys == key).nonzero(as_tuple=True)[0]
+        if len(loc) > 0:
+            loc = loc.item()
+            self.access_time[loc] = self.time
+            self.hits += 1
+            return self.values[loc]
+        else:
+            self.misses += 1
+            return None
+
+    def put(self, key, value):
+        self.time += 1
+        loc = (self.keys == key).nonzero(as_tuple=True)[0]
+        if len(loc) == 0:
+            # Find the LRU location
+            loc = th.argmin(self.access_time)
+            self.keys[loc] = key
+            self.values[loc] = value
+            self.access_time[loc] = self.time
+        else:
+            # Update existing location
+            loc = loc.item()
+            self.values[loc] = value
+            self.access_time[loc] = self.time
+    
+    def stats(self):
+        return {"hits": self.hits, "misses": self.misses}

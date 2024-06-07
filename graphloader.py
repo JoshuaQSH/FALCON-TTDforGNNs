@@ -7,12 +7,52 @@ from torch_geometric.utils import add_self_loops, to_undirected
 
 from ogb.nodeproppred import DglNodePropPredDataset
 import dgl
+from dgl.dataloading import NeighborSampler
+from dgl.distributed import DistGraph, DistDataLoader, node_split
 import numpy as np
 import matplotlib.pyplot as plt
 import community as community_louvain
 import pandas as pd
 
 import os
+
+def dist_graph_loader(target_dataset, root, device, args):
+    print("Prepare distributed graph data loader for {} dataset".format(target_dataset))
+    
+    # load data
+    graph, label = load_ogb(target_dataset, root)
+
+    # initialize distributed contexts
+    # dgl.distributed.initialize('ip_config.txt')
+    # th.distributed.init_process_group(backend='gloo')
+
+    # Partition a graph for distributed training and store the partitions on files.
+    dgl.distributed.partition_graph(graph, 'dict_graph', 2, 
+        num_hops=3, 
+        part_method='metis',
+        out_path='output/', 
+        balance_edges=True)
+    
+    # load distributed graph
+    g = DistGraph('dict_graph', './output/dict_graph.json')
+    pb = g.get_partition_book()
+    train_nid = dgl.distributed.node_split(g.ndata['train_mask'], pb, force_even=True)
+    val_nid = dgl.distributed.node_split(g.ndata['val_mask'], pb, force_even=True)
+    test_nid = dgl.distributed.node_split(g.ndata['test_mask'], pb, force_even=True)
+    # Create sampler
+    sampler = NeighborSampler(g, [int(fanout) for fanout in args.fan_out.split(',')],
+                          dgl.distributed.sample_neighbors,
+                          device)
+    dataloader = DistDataLoader(
+        dataset=train_nid.numpy(),
+        batch_size=args.batch,
+        collate_fn=sampler.sample_blocks,
+        shuffle=True,
+        drop_last=False)
+    
+    return dataloader, g, label
+
+
 
 def load_reddit(self_loop=True):
     from dgl.data import RedditDataset
@@ -71,9 +111,14 @@ def dgl_graph_loader(target_dataset, root, device, args):
     # add reverse edges
     # print('add reversed edges')
     srcs, dsts = graph.all_edges()
-    graph.add_edges(dsts, srcs)
+    
+    if target_dataset != 'ogbn-paper100M':
+        graph.add_edges(dsts, srcs)
+    # graph.add_edges(dsts, srcs)
+
     nfeat = graph.ndata.pop('feat')
 
+    
     labels = labels[:, 0]
     print("train idx shape (DGL): ", train_idx.shape)
     print("nfeat shape (DGL): ", nfeat.shape)
@@ -81,13 +126,16 @@ def dgl_graph_loader(target_dataset, root, device, args):
     print("degree (DGL): ", graph.in_degrees())
 
     if args.plot:
+        plt.rc('xtick', labelsize=20) 
+        plt.rc('ytick', labelsize=20) 
+        plt.rcParams.update({'font.size': 22})
         plt.figure(figsize=(12, 6))
         plt.plot(th.arange(len(graph.in_degrees())),  graph.in_degrees())
         plt.xlabel('Node Index')
         plt.ylabel('# degree')
         plt.title('Graph Degree Distribution')
         plt.grid(True)
-        plt.savefig("./figures/degree_distribution_{}.pdf".format(target_dataset))
+        plt.savefig("./figures/degree_distribution_{}.pdf".format(target_dataset), dpi=1500)
 
     # # add self-loop - ogbn-arxiv
     # print(f"Total edges before adding self-loop {graph.number_of_edges()}")

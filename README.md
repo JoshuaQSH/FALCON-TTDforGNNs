@@ -42,32 +42,13 @@ We recommand run the model with the `run_script.sh`, but to test each module, tr
 # Run with GraphSAGE, dataset: ogbn-products, FBTT
 $ ./run_script.sh fbtt-products
 
-# Run with GraphSAGE, dataset: ogbn-papers100M, FBTT
-$ ./run_script.sh fbtt-papers
-
-# To compare the origin, also run w/o TTD
-$ ./run_script.sh origin-papers
-
 # Run with GCN, dataset: ogbn-arxiv, FBTT
 $ ./run_script.sh gcn
 
 # Run with GAT, dataset: ogbn-arxiv, FBTT
 $ ./run_script.sh gat
 
-# To profile the model - GCN
-$ ./run_script.sh profile-gcn
 
-# To profile the model - GraphSAGE
-$ ./run_script.sh profile-sage
-
-# Run with three level partitioning
-$ ./run_script.sh partition
-
-# Run with eff
-$ ./run_script.sh eff
-
-# Run with GraphSAGE full-neighbour
-$ ./run_script.sh fbtt-full
 ```
 
 - Without the script:
@@ -116,21 +97,8 @@ $ ncu --metrics sass__inst_executed_shared_loads,sass__inst_executed_global_load
 | ogbn-products | NoTT-Sample-3 | 5902.9 | 2 | 128 | 70.99% | [5, 10, 15] | 66.33 |
 | ogbn-products | NoTT-Sample-3(metis-128) | 5925.1 | 2 | 1024 | 72.11% | [5, 10, 15] | 33.10 |
 | ogbn-products | NoTT-Sample-4 | 5914.6 | 2 | 128 | 68.7% | [5, 5, 10] | 26.39 |
-| ogbn-products | TTD-Embeddings-Full | 8506.3 | 2 | 128 | 58.92% | / | 13252.72 |
-| ogbn-products | TTD-Embeddings-1 | 4691.4 | 2 | 1024 | 64.17% | [30, 50, 100] | 479.63 |
-| ogbn-products | TTD-Embeddings-2 | 128.1 | 2 | 128 | 51.71% | [5, 10, 15] | 104.29 |
-| ogbn-products | TTD-Embeddings-3 | 129.0 | 2 | 128 | 60.66% | [5, 10, 15] | 127.73 |
-| ogbn-products | TTD-Embeddings-4 | 710.1 | 2 | 1024 | 49.31% | [5, 10, 15] | 53.51 |
-| ogbn-products | TTD-Embeddings-5(metis-random) | 709.9 | 2 | 1024 | 57.94% | [5, 10, 15] | 53.29 |
-| ogbn-products | TTD-Embeddings-5(metis-100) | 710.6 | 2 | 1024 | 56.75% | [5, 10, 15] | 58.50 |
 | ogbn-products | TTD-Embeddings-5(metis-128) | 711.0 | 2 | 1024 | 69.34% | [5, 10, 15] | 56.89 | **
 | ogbn-products | TTD-Embeddings-5(rcmk) | 710.1 | 2 | 1024 | 71.47% | [5, 10, 15] | 58.14 | **
-| ogbn-products | TTD-Embeddings-4(R24) | 714.8 | 2 | 1024 | 67.62% | [5, 10, 15] | 88.25 |
-| ogbn-products | TTD-Embeddings-4(R16) | 710.7 | 2 | 1024 | 66.62% | [5, 10, 15] | 58.15 |
-| ogbn-products | TTD-Embeddings-4(R16)(metis-128) | 1208.1 | 2 | 2048 | 67.16% | [5, 10, 15] | 42.48 |
-| ogbn-products | TTD-Embeddings-4-Cached(R16) | 860 | 2 | 1024 | 64.43% | [5, 10, 15] | 83.08 |
-| ogbn-products | TTD-Embeddings-4(R4) | 709.3 | 2 | 1024 | 45.73% | [5, 10, 15] | 52.35 |
-| ogbn-products | TTD-Embeddings-4(R2) | 708.7 | 2 | 1024 | 36.34% | [5, 10, 15] | 52.05 |
 
 - NoTT-Sample-4 and TTD-Embeddings-4(R16) have similar TestAcc with the same batchsize and epoch settings. TTD saved 8x memory space but 50% Runtime drop.
 - NoTT-Sample-3 gives even higher test acc but with more sampling neighbors in the second layer, slower runtime. TTD will save 8x memory and also gain 1.23x runtime speedup
@@ -158,4 +126,27 @@ assert len(self.tt_p_shapes) == len(self.tt_q_shapes)
 
 ```
 compute-sanitizer --tool memcheck ... --save cuda_mem_log
+```
+
+
+### Fusion and caching
+
+TTEmbeddingBag -> init (cache_size, hashtbl) -> register to List[torch.Tensor] -> cache_state, cache_freq, hashtbl, cache_optimizer_state, cache_weight[cache_size, embedding_dim]
+forward()
+preprocess_indicesi_sync(), warmup statge -> cuda_kernel_lookup(), cub::DevicePartition::Flagged() -> index for uncompressed embedding table and index for TT cores
+TTLookupFunction() -> pack the tensors -> tt_embeddings.tt_forward(), tt_embeddings.cache_forward() 
+- The uncached index row will be computed by tt_forward(), the others will be lookup by calling cache_forward() - the uncompressed embeddings table
+
+indices, input_nodes: A minibatch sample graph (block[0].shape[0])
+rowidx: index required to train
+tableidx: index already been cached
+B: The first shape of the input_nodes
+num_embeddings: The whole size of the graph (nfeat.shape[0])
+D, embedding_size: feature size (nfeat.shape[1])
+
+nnz_cached: cached index
+cache_loacation
+
+```shell
+CUDA_VISIBLE_DEVICES=1 ncu --metrics dram_bytes_read,gpu_time_duration --clock-control none -o ncu-tt-test -f --target-processes all python unitest_profile_fbtt.py
 ```

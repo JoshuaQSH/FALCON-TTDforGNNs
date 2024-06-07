@@ -1,16 +1,14 @@
 #!/usr/bin/bash
 
-BATCHSIZE=2048
+BATCHSIZE=4096
 PARTITION=0
 
-EPOCHS=10
+EPOCHS=5
 RUN_TEST=$@
 CUDA="cuda:0"
-DATASET="ogbn-arxiv"
-DATASETDIR="/home/shenghao/gnn_related/dataset"
+DATASETDIR="/path/to/dataset"
 PROFILE=""
 WORKSPACE='--workspace home-3090'
-# WORKSPACE=''
 
 ## Profiling Parameters
 dram=(
@@ -77,102 +75,179 @@ then
     echo "-----Profiling Parameters-----"
     echo "$PROFILE"
 
-elif [ $RUN_TEST = "rank" ]
-then
-    echo "-----Running with varying ranks-----"
-    for Franks in {2..128..2}
-    do
-        for Sranks in {2..128..2}
-        do
-            echo "-----Running with [$Franks,$Sranks] ranks-----"
-            python3 sage_dgl_partition.py --use-sample --use-tt --epochs $EPOCHS --device $CUDA --partition 125 --tt-rank "${Franks},${Sranks}" --p-shapes "125,140,140" --q-shapes "4,5,5" --batch $BATCHSIZE --logging
-        done
-    done
 
-elif [ $RUN_TEST = "profile-gcn" ]
+elif [ $RUN_TEST = "baseline" ]
 then
-    echo "-----Running with profiling (GCN)-----"
-    ### --launch-count 1 --launch-skip 4    
-    ncu --target-processes all -f -o gcn_fbtt_adam \
-        python3 gcn_gat_partition.py \
-        --use-sample \
-        --use-tt \
-        --epochs 10 \
-        --batch $BATCHSIZE \
-        --device "cuda:1" \
-        --partition $PARTITION \
-        --model gcn \
-        --tt-rank "16,16" \
-        --p-shapes "125,140,140" \
-        --q-shapes "4,4,8" \
-        --batch 2048 \
-        --emb-name "fbtt" \
-        --dataset $DATASET \
-        --use-labels \
-        --use-linear \
-        --logging
+    echo "-----Running Baseline-----"
+    # python3 sage_dgl_partition.py --use-sample \
+    #     --use-tt \
+    #     --fan-out '3,5,15' \
+    #     --epochs $EPOCHS \
+    #     --device $CUDA \
+    #     --partition $PARTITION \
+    #     --tt-rank "16,16,16" \
+    #     --p-shapes "125,140,140,140" \
+    #     --q-shapes "5,5,2,2" \
+    #     --emb-name "fbtt" \
+    #     --num-layers 3 \
+    #     --num-hidden 256 \
+    #     --use-tt \
+    #     --dataset "ogbn-products" \
+    #     --batch $BATCHSIZE \
+    #     --init "noinit" \
+    #     --batch-count 1000 \
+    #     $WORKSPACE
 
-elif [ $RUN_TEST = "profile-sage" ]
-then
-    echo "-----Running with profiling (GraphSAGE)-----"    
-    ### --launch-count 1 --launch-skip 4
-    ### --set roofline
-    ### --target-processes all
-    ncu --metrics $PROFILE -f -o sage_fbtt \
-        python3 sage_dgl_partition.py \
-        --use-sample \
+
+    python3 sage_dgl_partition.py --use-sample \
         --use-tt \
-        --epochs 1 \
-        --batch $BATCHSIZE \
+        --fan-out '3,5,15' \
+        --epochs $EPOCHS \
         --device $CUDA \
         --partition $PARTITION \
-        --model sage \
-        --tt-rank "16,16" \
-        --p-shapes "125,140,140" \
-        --q-shapes "4,5,5" \
+        --tt-rank "16,16,16" \
+        --p-shapes "50,60,60,60" \
+        --q-shapes "2,4,4,4" \
+        --batch $BATCHSIZE \
         --emb-name "fbtt" \
+        --num-layers 3 \
+        --num-hidden 256 \
+        --dataset ogbn-arxiv \
+        --init "noinit" \
+        --logging \
+        $WORKSPACE
 
-    # nsys profile --stats=true -o sage_fbtt_nsys --force-overwrite true \
-    #     python3 sage_dgl_partition.py \
-    #     --use-sample \
+    # python3 sage_dgl_partition.py --use-sample \
     #     --use-tt \
-    #     --epochs 2 \
+    #     --fan-out '3,5,15' \
+    #     --epochs 5 \
+    #     --device $CUDA \
+    #     --partition $PARTITION \
+    #     --tt-rank "16,16,16" \
+    #     --p-shapes "125,140,140,140" \
+    #     --q-shapes "5,5,2,2" \
     #     --batch $BATCHSIZE \
-    #     --device "cuda:0" \
-    #     --partition 0 \
-    #     --tt-rank "16,16" \
-    #     --p-shapes "125,140,140" \
-    #     --q-shapes "4,5,5" \
-    #     --batch 2048 \
-    #     --emb-name "fbtt"
+    #     --emb-name "fbtt" \
+    #     --num-layers 3 \
+    #     --num-hidden 256 \
+    #     --dataset ogbn-products \
+    #     --init "noinit" \
+    #     --logging \
+    #     $WORKSPACE
     
-elif [ $RUN_TEST = "partition" ]
+    # python3 sage_dgl_partition.py --use-sample \
+    #     --use-tt \
+    #     --fan-out '3,5,15' \
+    #     --epochs $EPOCHS \
+    #     --device $CUDA \
+    #     --partition $PARTITION \
+    #     --tt-rank "16,16" \
+    #     --p-shapes "50,60,60" \
+    #     --q-shapes "8,4,4" \
+    #     --batch $BATCHSIZE \
+    #     --emb-name "fbtt" \
+    #     --num-layers 3 \
+    #     --num-hidden 256 \
+    #     --dataset ogbn-arxiv \
+    #     --init "noinit" \
+    #     --logging \
+    #    $WORKSPACE
+
+    # python3 sage_dgl_partition.py --use-sample \
+    #     --use-tt \
+    #     --fan-out '3,5,15' \
+    #     --epochs 5 \
+    #     --device "cuda:0" \
+    #     --partition $PARTITION \
+    #     --tt-rank "16,16" \
+    #     --p-shapes "4000,5000,6000" \
+    #     --q-shapes "4,4,8" \
+    #     --batch 12 \
+    #     --emb-name "fbtt" \
+    #     --num-layers 3 \
+    #     --num-hidden 256 \
+    #     --dataset "ogbn-papers100M" \
+    #     --init "noinit"
+
+    python3 gcn_gat_partition.py \
+        --use-tt \
+        --epochs $EPOCHS \
+        --device $CUDA \
+        --partition $PARTITION \
+        --tt-rank "16,16,16" \
+        --p-shapes "50,60,60,60" \
+        --q-shapes "2,4,4,4" \
+        --emb-name "fbtt" \
+        --dataset ogbn-arxiv \
+        --use-labels \
+        --use-linear \
+        --model gcn \
+        --init "noinit" \
+        --logging \
+        $WORKSPACE
+    
+    python3 gcn_gat_partition.py \
+        --use-tt \
+        --epochs $EPOCHS \
+        --device $CUDA \
+        --partition $PARTITION \
+        --tt-rank "16,16,16" \
+        --p-shapes "50,60,60,60" \
+        --q-shapes "2,4,4,4" \
+        --emb-name "fbtt" \
+        --dataset ogbn-arxiv \
+        --model gat \
+        --init "noinit" \
+        --logging \
+        $WORKSPACE
+
+elif [ $RUN_TEST = "p3" ]
 then
-    # echo "-----Running with varying partitions-----"
-    # for i in {0..20}
-    # do
-    #     echo "-----Running with partition $i-----"
-    #     python3 sage_dgl_partition.py --use-sample --use-tt --epochs $EPOCHS --device $CUDA --partition $i --tt-rank "16,16" --p-shapes "125,140,140" --q-shapes "4,5,5" --batch $BATCHSIZE --logging
-    # done
-    # echo "-----Running with baseline -----"
-    # python3 sage_dgl_partition.py --use-sample --use-tt --epochs $EPOCHS --device $CUDA --partition 0 --tt-rank "16,16" --p-shapes "125,140,140" --q-shapes "4,5,5" --emb-name "fbtt" --batch $BATCHSIZE --logging
-    # echo "-----Running with rcmk -----"
-    # python3 sage_dgl_partition.py --use-sample --use-tt --epochs $EPOCHS --device $CUDA --partition -2 --tt-rank "16,16" --p-shapes "125,140,140" --q-shapes "4,5,5" --emb-name "fbtt" --batch $BATCHSIZE --logging
-    # echo "-----Running with METIS 3 -----"
-    # python3 sage_dgl_partition.py --use-sample --use-tt --epochs $EPOCHS --device $CUDA --partition 3 --tt-rank "16,16" --p-shapes "125,140,140" --q-shapes "4,5,5" --emb-name "fbtt" --batch $BATCHSIZE --logging
-    echo "-----Running with three level METIS -----"
-    python3 sage_dgl_partition.py --use-sample --use-tt --epochs $EPOCHS --device $CUDA --partition -1 --tt-rank "16,16" --p-shapes "125,140,140" --q-shapes "4,5,5" --emb-name "fbtt" --batch $BATCHSIZE --logging
+    echo "-----Profiler only Script (GraphSAGE) p3-----"
+    PROFILESIZE=1000
+    CUDA_VISIBLE_DEVICE=1 python3 sage_profiler.py --use-sample \
+            --fan-out '3,5,15' \
+            --epochs 1 \
+            --device "cuda:0" \
+            --partition $PARTITION \
+            --tt-rank "16,16" \
+            --p-shapes "125,140,140" \
+            --q-shapes "4,5,5" \
+            --batch $PROFILESIZE \
+            --emb-name "fbtt" \
+            --num-layers 3 \
+            --num-hidden 256 \
+            --use-tt \
+            --dataset "ogbn-products"
+
+elif [ $RUN_TEST = "p4" ]
+then
+    echo "-----Profiler only Script (GraphSAGE) p4-----"
+    PROFILESIZE=1000
+    ncu --metrics dram__bytes_read,gpu__time_duration --clock-control none -o ncu-fwd-sage1-tt-bc1-4w-32g-${PROFILESIZE} -f --target-processes all \
+        python3 sage_profiler.py --use-sample \
+                --fan-out '3,5,15' \
+                --epochs 1 \
+                --device "cuda:0" \
+                --partition $PARTITION \
+                --tt-rank "16,16" \
+                --p-shapes "440,450,425" \
+                --q-shapes "4,5,5" \
+                --batch $PROFILESIZE \
+                --emb-name "fbtt" \
+                --num-layers 3 \
+                --num-hidden 256 \
+                --use-tt \
+                --dataset "ogbn-products"
 
 elif [ $RUN_TEST = "cpu" ]
 then
     echo "-----Running with CPU Embedding-----"
     ### products
     # python3 sage_dgl_partition.py --use-sample --epochs $EPOCHS --device "cpu" --partition $PARTITION --batch $BATCHSIZE --dataset "ogbn-products"
-    # python3 sage_dgl_partition.py --use-sample --epochs 5 --device "cpu" --partition $PARTITION --batch $BATCHSIZE --dataset "ogbn-products" --logging
-    # python3 sage_dgl_partition.py --use-sample --epochs 2 --device "cpu" --partition $PARTITION --batch 1 --dataset "ogbn-products"
 
     ### arxiv
-    # python3 sage_dgl_partition.py --epochs $EPOCHS --device "cpu" --partition $PARTITION --batch 1 --dataset "ogbn-arxiv" --logging
+    # python3 sage_dgl_partition.py --epochs $EPOCHS --device "cpu" --partition $PARTITION --batch 1 --dataset "ogbn-arxiv" --access-count --plot
 
     ### papers
     python3 sage_dgl_partition.py --epochs $EPOCHS --device "cpu" --partition $PARTITION --batch 5 --dataset "ogbn-papers100M"
@@ -184,40 +259,27 @@ elif [ $RUN_TEST = "fbtt-products" ]
 then
     echo "-----Running with FBTT (ogbn-products)-----"
     # compute-sanitizer --tool memcheck python3 sage_dgl_partition.py --use-sample --use-tt --epochs $EPOCHS --device $CUDA --partition $PARTITION --tt-rank "16,16" --p-shapes "50,80,100" --q-shapes "4,4,8" --batch $BATCHSIZE --emb-name "fbtt" --dataset "ogbn-arxiv"
-    python3 sage_dgl_partition.py --use-sample \
+    python sage_dgl_partition.py --use-sample \
         --use-tt \
         --fan-out '3,5,15' \
         --epochs $EPOCHS \
-        --device $CUDA \
+        --device cuda \
         --partition $PARTITION \
         --tt-rank "16,16" \
         --p-shapes "125,140,140" \
         --q-shapes "4,5,5" \
-        --batch $BATCHSIZE \
+        --batch 4096 \
         --emb-name "fbtt" \
         --num-layers 3 \
         --num-hidden 256 \
-        --dataset "ogbn-products" \
-        --dataset-dir $DATASETDIR
+        --dataset ogbn-products \
+        --init "noinit" \
+        --batch-count 1000
 
-elif [ $RUN_TEST = "origin-papers" ]
+elif [ $RUN_TEST = "final-p" ]
 then
-     echo "-----Running with GraphSAGE ogbn-papers100M-----"
-     python3 sage_dgl_partition.py --use-sample \
-        --fan-out '3,5,15' \
-        --epochs $EPOCHS \
-        --device $CUDA \
-        --partition $PARTITION \
-        --batch $BATCHSIZE \
-        --emb-name "fbtt" \
-        --num-layers 3 \
-        --num-hidden 256 \
-        --dataset "ogbn-papers100M" \
-        --dataset-dir $DATASETDIR
+echo "-----Running with FBTT (ogbn-arxiv) Final-----"
 
-elif [ $RUN_TEST = "fbtt-papers" ]
-then
-    echo "-----Running with FBTT (ogbn-papers100M)-----"
     python3 sage_dgl_partition.py --use-sample \
         --use-tt \
         --fan-out '3,5,15' \
@@ -225,51 +287,142 @@ then
         --device $CUDA \
         --partition $PARTITION \
         --tt-rank "16,16" \
-        --p-shapes "400,640,740" \
+        --p-shapes "50,60,60" \
         --q-shapes "4,4,8" \
         --batch $BATCHSIZE \
         --emb-name "fbtt" \
         --num-layers 3 \
         --num-hidden 256 \
-        --dataset "ogbn-papers100M" \
-        --dataset-dir $DATASETDIR
+        --dataset ogbn-arxiv \
+        --sparse \
+        --init "noinit" \
+        --batch-count 11000 \
+        --cache-size 10 \
+        --use-cached \
+        $WORKSPACE
 
-elif [ $RUN_TEST = "fbtt4090" ]
+elif [ $RUN_TEST = "final-p2" ]
 then
-    echo "-----Running with FBTT with 4090-----"
-    ### GCN
-    # python3 gcn_gat_partition.py --use-tt --epochs $EPOCHS --device $CUDA --partition $PARTITION --tt-rank "16,16" --p-shapes "125,140,140" --q-shapes "4,4,8" --emb-name "fbtt" --dataset $DATASET --use-labels --use-linear --model gcn $WORKSPACE
+echo "-----Running with FBTT (ogbn-products) Final-----"
+    python3 sage_dgl_partition.py --use-sample \
+        --use-tt \
+        --fan-out '3,5,15' \
+        --epochs $EPOCHS \
+        --device $CUDA \
+        --partition $PARTITION \
+        --tt-rank "16,16,16" \
+        --p-shapes "125,140,140,140" \
+        --q-shapes "2,2,5,5" \
+        --batch $BATCHSIZE \
+        --emb-name "fbtt" \
+        --num-layers 3 \
+        --num-hidden 256 \
+        --dataset ogbn-products \
+        --use-cached \
+        --sparse \
+        --cache-size 10 \
+        --init "noinit" \
+        --batch-count 14000 \
+        --logging \
+        $WORKSPACE
     
-    ### GAT
-    # python3 gcn_gat_partition.py --use-tt --epochs $EPOCHS --device $CUDA --partition $PARTITION --tt-rank "16,16" --p-shapes "125,140,140" --q-shapes "4,4,8" --emb-name "fbtt" --dataset $DATASET --use-linear --num-heads 3 --model gat $WORKSPACE
-    
-    ### GraphSAGE
-    python3 sage_dgl_partition.py --use-sample --use-tt --epochs $EPOCHS --device $CUDA --partition $PARTITION --tt-rank "16,16" --p-shapes "125,140,140" --q-shapes "4,5,5" --batch $BATCHSIZE --emb-name "fbtt" $WORKSPACE
-    
-    ### GraphSAGE + eff
-    # python3 sage_dgl_partition.py --use-sample --use-tt --epochs $EPOCHS --device $CUDA --partition -1 --tt-rank "16,16" --p-shapes "125,140,140" --q-shapes "4,5,5" --batch $BATCHSIZE --emb-name "eff" $WORKSPACE
+    # python3 sage_dgl_partition.py --use-sample \
+    #     --use-tt \
+    #     --fan-out '3,5,15' \
+    #     --epochs $EPOCHS \
+    #     --device $CUDA \
+    #     --partition $PARTITION \
+    #     --tt-rank "16,16" \
+    #     --p-shapes "50,60,60" \
+    #     --q-shapes "4,4,8" \
+    #     --batch $BATCHSIZE \
+    #     --emb-name "fbtt" \
+    #     --num-layers 3 \
+    #     --num-hidden 256 \
+    #     --dataset ogbn-arxiv \
+    #     --sparse \
+    #     --init "noinit" \
+    #     --batch-count 11000 \
+    #     --cache-size 10 \
+    #     --use-cached \
+    #     --logging \
+    #     $WORKSPACE
 
-elif [ $RUN_TEST = "fbtt-full" ]
+    # python3 sage_dgl_partition.py --use-sample \
+    #     --use-tt \
+    #     --fan-out '3,5,15' \
+    #     --epochs $EPOCHS \
+    #     --device $CUDA \
+    #     --partition $PARTITION\
+    #     --tt-rank "16,16,16" \
+    #     --p-shapes "125,140,100,100" \
+    #     --q-shapes "2,2,5,5" \
+    #     --batch $BATCHSIZE \
+    #     --emb-name "fbtt" \
+    #     --num-layers 3 \
+    #     --num-hidden 256 \
+    #     --dataset ogbn-products \
+    #     --use-cached \
+    #     --sparse \
+    #     --cache-size 10 \
+    #     --init "noinit" \
+    #     --batch-count 14000 \
+    #     $WORKSPACE
+
+elif [ $RUN_TEST = "final-g" ]
 then
-    echo "-----Running with FBTT full neighbors-----"
-    python3 sage_dgl_partition.py --use-tt --epochs $EPOCHS --device $CUDA --partition $PARTITION --tt-rank "16,16" --p-shapes "125,140,140" --q-shapes "4,5,5" --batch $BATCHSIZE --emb-name "fbtt"
+echo "-----Running with GCN/GAT Final-----"
+    python3 gcn_gat_partition.py \
+        --use-tt \
+        --epochs $EPOCHS \
+        --device $CUDA \
+        --partition $PARTITION \
+        --tt-rank "16,16,16" \
+        --p-shapes "50,60,60,60" \
+        --q-shapes "4,2,4,4" \
+        --emb-name "fbtt" \
+        --dataset ogbn-arxiv \
+        --use-labels \
+        --use-linear \
+        --model gcn \
+        --sparse \
+        --init "noinit" \
+        --use-cache \
+        --cache-size 10 \
+        --batch-count 14000 \
+        --logging \
+        $WORKSPACE
+    
+    python3 gcn_gat_partition.py \
+        --use-tt \
+        --epochs $EPOCHS \
+        --device $CUDA \
+        --partition $PARTITION \
+        --tt-rank "16,16,16" \
+        --p-shapes "50,60,60,60" \
+        --q-shapes "4,2,4,4" \
+        --emb-name "fbtt" \
+        --dataset ogbn-arxiv \
+        --model gat \
+        --sparse \
+        --init "noinit" \
+        --use-cache \
+        --cache-size 10 \
+        --batch-count 14000 \
+        --logging \
+        $WORKSPACE
 
 elif [ $RUN_TEST = "gcn" ]
 then
     echo "-----Running with GCN (${DATASET} in Full Batch) ----- "
-    # python3 gcn_gat_partition.py --use-tt --epochs $EPOCHS --device $CUDA --partition $PARTITION --tt-rank "16,16" --p-shapes "125,140,140" --q-shapes "4,4,8" --emb-name "fbtt" --dataset $DATASET --use-labels --use-linear --model gcn
-    python3 gcn_gat_partition.py --use-tt --epochs $EPOCHS --device $CUDA --partition $PARTITION --tt-rank "16,16" --p-shapes "125,140,140" --q-shapes "4,4,8" --emb-name "eff" --dataset $DATASET --use-labels --use-linear --model gcn
+    python3 gcn_gat_partition.py --use-tt --epochs $EPOCHS --device "cuda:0" --partition $PARTITION --tt-rank "16,16" --p-shapes "125,140,140" --q-shapes "4,4,8" --emb-name "fbtt" --dataset ogbn-arxiv --use-labels --use-linear --model gcn $WORKSPACE
+    # python3 gcn_gat_partition.py --use-tt --epochs $EPOCHS --device "cuda:0" --partition $PARTITION --tt-rank "16,16" --p-shapes "125,140,140" --q-shapes "4,4,8" --emb-name "eff" --dataset ogbn-arxiv --use-labels --use-linear --model gcn $WORKSPACE
 
 elif [ $RUN_TEST = "gat" ]
 then
     echo "-----Running with GAT (${DATASET} in Full Batch) ----- "
-    python3 gcn_gat_partition.py --use-tt --epochs $EPOCHS --device $CUDA --partition $PARTITION --tt-rank "16,16" --p-shapes "125,140,140" --q-shapes "4,4,8" --emb-name "fbtt" --dataset $DATASET --use-linear --num-heads 3 --model gat
-    # python3 gcn_gat_partition.py --use-tt --epochs $EPOCHS --device $CUDA --partition $PARTITION --tt-rank "16,16" --p-shapes "125,140,140" --q-shapes "4,4,8" --emb-name "eff" --dataset $DATASET --use-linear --num-heads 3 --model gat
-
-elif [ $RUN_TEST = "eff" ]
-then
-    echo "-----Running with Efficient TT-----"
-    python3 sage_dgl_partition.py --use-sample --use-tt --epochs $EPOCHS --device $CUDA --partition 0 --tt-rank "16,16" --p-shapes "125,140,140" --q-shapes "4,5,5" --batch $BATCHSIZE --emb-name "eff"
+    python3 gcn_gat_partition.py --use-tt --epochs $EPOCHS --device $CUDA --partition $PARTITION --tt-rank "16,16" --p-shapes "125,140,140" --q-shapes "4,4,8" --emb-name "fbtt" --dataset ogbn-arxiv --use-linear --num-heads 3 --model gat $WORKSPACE
+    # python3 gcn_gat_partition.py --use-tt --epochs $EPOCHS --device $CUDA --partition $PARTITION --tt-rank "16,16" --p-shapes "125,140,140" --q-shapes "4,4,8" --emb-name "eff" --dataset ogbn-arxiv --use-linear --num-heads 3 --model gat $WORKSPACE
 
 else
     echo "No test specified. Exiting..."

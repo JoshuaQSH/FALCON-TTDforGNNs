@@ -181,12 +181,15 @@ def run(args, device, data, train_loader, evaluator, dist=None):
 
     # Add logging
     # Setup the saved log file, with time and filename
-    saved_log_path = './logs/profile/'
+    saved_log_path = '../../../logs/'
     start_time = int(round(time.time()*1000))
     timestamp = time.strftime('%Y%m%d-%H%M%S',time.localtime(start_time/1000))
 
     if args.logging:
-        saved_log_name = saved_log_path + '{}-{}-{}-{}.log'.format(args.model, args.dataset, args.batch, timestamp)
+        # saved_log_name = saved_log_path + '{}-{}-{}-{}.log'.format(args.model, args.dataset, args.batch, timestamp)
+        saved_log_name = saved_log_path + 'Baseline-{}-{}-4090-r3-{}.log'.format(args.model, args.batch, timestamp)
+        # saved_log_name = saved_log_path + 'Final-{}-4090-r3-{}.log'.format(args.model, timestamp)
+
         log = Logger(saved_log_name, level='debug')
         log.logger.debug("[Running GraphSAGE Model == Hidden: {}, Layers: {} ==]".format(args.num_hidden, args.num_layers))
         log.logger.debug("[Dataset: {}]".format(args.dataset))
@@ -214,8 +217,9 @@ def run(args, device, data, train_loader, evaluator, dist=None):
                     tt_ranks=tt_rank,
                     tt_p_shapes=p_shapes,
                     tt_q_shapes=q_shapes,
-                    sparse=False,
-                    use_cache=False,
+                    sparse=args.sparse,
+                    use_cache=args.use_cached,
+                    cache_size=args.cache_size,
                     weight_dist="normal",
                     )
 
