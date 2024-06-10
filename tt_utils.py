@@ -101,9 +101,9 @@ def compression_rate(N, R, cores):
 def get_eigen(g, k, name, mode='adj'):
     file_name = name + '_' + mode + '_' + str(k)
     if mode == 'adj':
-        adj = g.adj(scipy_fmt='csr')
+        adj = g.adj_external(scipy_fmt='csr')
     elif mode == 'laplacian':
-        adj = g.adj(scipy_fmt='csr') * -1
+        adj = g.adj_external(scipy_fmt='csr') * -1
         diag = g.in_degrees().detach().numpy()
         diag = scipy.sparse.diags(diag)
         adj = diag - adj

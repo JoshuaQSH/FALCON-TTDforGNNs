@@ -49,7 +49,7 @@ class SAGE(nn.Module):
                  tt_rank=[16,16],
                  p_shapes=None,
                  q_shapes=None,
-                 dist=None,
+                 init=None,
                  graph=None,
                  device='cpu',
                  embed_name ='fbtt',
@@ -57,7 +57,8 @@ class SAGE(nn.Module):
                  use_cached=False,
                  cache_size=0,
                  sparse=False,
-                 batch_count=1000):
+                 batch_count=1000,
+                 weights_init=None):
         super().__init__()
         self.n_layers = n_layers
         self.n_hidden = n_hidden
@@ -126,7 +127,7 @@ class SAGE(nn.Module):
                 else:
                     print("Unknown embedding type")                                
             
-            if dist == 'eigen':
+            if init == 'eigen':
                 eigen_vals, eigen_vecs = get_eigen(graph, in_feats, name='ogbn-products')
                 eigen_vecs = th.tensor(eigen_vecs * np.sqrt(eigen_vals).reshape((1, len(eigen_vals))), dtype=th.float32)
                 emb_pad = np.zeros(shape=(125 * 140 * 140, 100)).astype(np.float32)
@@ -140,9 +141,18 @@ class SAGE(nn.Module):
                     )
                 for i in range(3):
                     self.embed_layer.tt_cores[i].data = tt_cores[i].to(self.device)
+            
+            # autotune
+            elif init == 'auto':
+                if weights_init is not None:
+                    print("Using the auto-tuned weights")
+                    for i in range(3):
+                        self.embed_layer.tt_cores[i].data = th.tensor(weights_init[i]).to(th.float32).to(device)
+                else:
+                    print("No initialization for weights")
 
             # TODO: init Here
-            elif dist == 'ortho':
+            elif init == 'ortho':
                 print("initialized from orthogonal cores")
                 tt_cores = get_ortho(
                     [1, tt_rank[0], tt_rank[1], 1],
@@ -152,8 +162,8 @@ class SAGE(nn.Module):
                 # TODO: initialized the tt_cores weights
                 for i in range(3):
                     self.embed_layer.tt_cores[i].data = th.tensor(tt_cores[i]).to(device)
-                    
-            elif dist == 'dortho':
+    
+            elif init == 'dortho':
                 print('initialized from decomposing orthogonal matrix')
                 rand_A = np.random.random(size=(125 * 140 * 140, 100)).astype(np.float32)
                 emb_w, _ = np.linalg.qr(rand_A)

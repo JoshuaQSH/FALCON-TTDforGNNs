@@ -276,6 +276,26 @@ then
         --init "noinit" \
         --batch-count 1000
 
+elif [ $RUN_TEST = "autotuning" ]
+then
+    echo "-----Running with FBTT (ogbn-products) AUTOTUNE-----"
+    python tuning_SAGE.py --use-sample \
+        --use-tt \
+        --fan-out '3,5,15' \
+        --epochs $EPOCHS \
+        --device cuda \
+        --partition $PARTITION \
+        --tt-rank "16,16" \
+        --p-shapes "125,140,140" \
+        --q-shapes "4,5,5" \
+        --batch 4096 \
+        --emb-name "fbtt" \
+        --num-layers 3 \
+        --num-hidden 256 \
+        --dataset ogbn-products \
+        --init "auto" \
+        --batch-count 1000
+
 elif [ $RUN_TEST = "final-p" ]
 then
 echo "-----Running with FBTT (ogbn-arxiv) Final-----"

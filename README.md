@@ -108,6 +108,8 @@ $ ncu --metrics sass__inst_executed_shared_loads,sass__inst_executed_global_load
 
 ### Hyperparameters (so far)
 
+We use [nevergrad](https://github.com/facebookresearch/nevergrad/tree/main?tab=readme-ov-file) to tune our weights as well as the tt_ranks
+
 - tt_rank
 - partition
 - init
