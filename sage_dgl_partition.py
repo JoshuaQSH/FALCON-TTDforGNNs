@@ -6,9 +6,11 @@ import numpy as np
 import torch as th
 import torch.nn as nn
 import torch.nn.functional as F
+import torchmetrics.functional as MF
 import torch.optim as optim
 import torch.multiprocessing as mp
 import torch.distributed as dist
+from torch.nn.parallel import DistributedDataParallel
 
 from ogb.nodeproppred import DglNodePropPredDataset
 
@@ -22,7 +24,13 @@ from utils import Logger, gpu_timing, memory_usage, calculate_access_percentages
 from dgl_sage import SAGE
 from graphloader import dgl_graph_loader
 
-os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'max_split_size_mb:32'
+from dgl.dataloading import (
+    DataLoader,
+    MultiLayerFullNeighborSampler,
+    NeighborSampler,
+)
+
+# os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'max_split_size_mb:32'
 
 def compute_acc(pred, labels):
     """
@@ -82,7 +90,7 @@ def train(train_loader, model, loss_fcn, optimizer, lr_scheduler, nfeat, labels,
         # Compute loss and prediction
         # model.embed_layer.cache_populate()
         batch_pred = model(blocks, batch_inputs)
-        
+        batch_labels = batch_labels.view(-1)
         loss = loss_fcn(batch_pred, batch_labels)
         # Forward throughput
         fwd_throughput= len(seeds)/(time.time()-tic_step)
@@ -110,10 +118,28 @@ def train(train_loader, model, loss_fcn, optimizer, lr_scheduler, nfeat, labels,
     
     return ave_forward_throughput, ave_backward_throughput, iter_tput
 
-def train_dist(proc_id, nprocs, device, g, n_classes, train_idx, val_idx, model, use_uva, args):
+def evaluate(device, model, g, num_classes, dataloader):
+    model.eval()
+    ys = []
+    y_hats = []
+    for it, (input_nodes, output_nodes, blocks) in enumerate(dataloader):
+        with th.no_grad():
+            blocks = [block.to(device) for block in blocks]
+            x = blocks[0].srcdata["feat"]
+            ys.append(blocks[-1].dstdata["label"])
+            y_hats.append(model(blocks, x))
+    return MF.accuracy(
+        th.cat(y_hats),
+        th.cat(ys),
+        task="multiclass",
+        num_classes=num_classes,
+    )
+
+
+def train_dist(proc_id, nprocs, device, g, num_classes, train_idx, val_idx, model, use_uva, args):
     sampler = NeighborSampler([int(fanout) for fanout in args.fan_out.split(',')], 
         prefetch_node_feats=["feat"], 
-        prefetch_labels=["labels"],)
+        prefetch_labels=["label"],)
     train_loader = dgl.dataloading.DataLoader(
         g, 
         train_idx, 
@@ -142,22 +168,34 @@ def train_dist(proc_id, nprocs, device, g, n_classes, train_idx, val_idx, model,
     for epoch in range(args.epochs):
         model.train()
         total_loss = 0
-        for step, (input_nodes, seeds, blocks) in enumerate(train_loader):
+        # for step, (input_nodes, seeds, blocks) in enumerate(train_loader):
+        for it, (input_nodes, output_nodes, blocks) in enumerate(train_loader):
             batch_inputs = blocks[0].srcdata['feat']
-            batch_labels = blocks[-1].dstdata['labels'].to(torch.int64)
+            batch_labels = blocks[-1].dstdata['label'].to(th.int64)
             batch_pred = model(blocks, batch_inputs)
             loss = F.cross_entropy(batch_pred, batch_labels)
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
-            total_loss += loss.item()
-            if step % args.log_every == 0:
-                acc = compute_acc(batch_pred, batch_labels)
-                print('Epoch {:05d} | Step {:05d} | Loss {:.4f} | Train Acc {:.4f}'.format(
-                    epoch, step, total_loss / (step + 1), acc.item()))
+            total_loss += loss
+
+        acc = (
+            evaluate(device, model, g, num_classes, val_loader).to(device) / nprocs
+        )
+        dist.reduce(tensor=acc, dst=0)
+        if proc_id == 0:
+            print(
+                f"Epoch {epoch:05d} | Loss {total_loss / (it + 1):.4f} | "
+                f"Accuracy {acc.item():.4f}"
+            )
+
+            # if step % args.log_every == 0:
+            #     acc = compute_acc(batch_pred, batch_labels)
+            #     print('Epoch {:05d} | Step {:05d} | Loss {:.4f} | Train Acc {:.4f}'.format(
+            #         epoch, step, total_loss / (step + 1), acc.item()))
 
 def run(proc_id, nprocs, devices, g, data, args):
-    print(nprocs)
+    
     # Corresponding device
     device = devices[proc_id]
     th.cuda.set_device(device)
@@ -173,7 +211,7 @@ def run(proc_id, nprocs, devices, g, data, args):
     in_size = g.ndata['feat'].shape[1]
     model = SAGE(
         num_nodes = g.number_of_nodes(), 
-        in_feats = in_feats, 
+        in_feats = 100, 
         n_hidden = args.num_hidden, 
         n_classes = n_classes, 
         n_layers = args.num_layers, 
@@ -183,7 +221,7 @@ def run(proc_id, nprocs, devices, g, data, args):
         tt_rank = [int(i) for i in args.tt_rank.split(',')],
         p_shapes = [int(i) for i in args.p_shapes.split(',')],
         q_shapes = [int(i) for i in args.q_shapes.split(',')],
-        dist = args.init, 
+        init = args.init, 
         graph = g, 
         device = args.device,
         embed_name = args.emb_name,
@@ -191,8 +229,9 @@ def run(proc_id, nprocs, devices, g, data, args):
         use_cached=args.use_cached,
         cache_size = args.cache_size,
         sparse = args.sparse,
-        batch_count = args.batch_count,)    
-    model = DistributedDataParallel(model, device_ids=[device], output_device=device)
+        batch_count = args.batch_count,).to(device) 
+    
+    model = DistributedDataParallel(model, device_ids=[device], output_device=device, find_unused_parameters=True)
     
     # Training
     use_uva = args.mode == "mixed"
@@ -234,10 +273,10 @@ def run_single(train_loader, full_neighbor_loader, data, args):
     # saved_log_name = saved_log_path + 'Partition-{}-{}-{}.log'.format(args.partition, args.batch, timestamp)
     # saved_log_name = saved_log_path + 'MotiTest-{}-{}-{}.log'.format(args.dataset, args.batch, timestamp)
     # saved_log_name = saved_log_path + 'CacheTest-{}-{}-noupdate-{}.log'.format(is_cached, args.cache_size, timestamp)
-    # saved_log_name = saved_log_path + 'Baseline-{}-{}-{}-4090-r3-{}.log'.format(args.model, args.batch, args.dataset, timestamp)
+    # saved_log_name = saved_log_path + 'Baseline-{}-{}-{}-r2-{}.log'.format(args.model, args.batch, args.dataset, timestamp)
     # saved_log_name = saved_log_path + 'WeightInit-{}-{}.log'.format(args.init, timestamp)
     # saved_log_name = saved_log_path + 'Fusion-{}.log'.format(timestamp)
-    saved_log_name = saved_log_path + 'FinalScale-{}-{}-4090-{}-r3-{}.log'.format(args.model, args.dataset, args.batch, timestamp)
+    saved_log_name = saved_log_path + 'FinalScale-{}-{}-{}-r2-{}.log'.format(args.model, args.dataset, args.batch, timestamp)
 
 
     if args.logging:
@@ -264,7 +303,7 @@ def run_single(train_loader, full_neighbor_loader, data, args):
         tt_rank = [int(i) for i in args.tt_rank.split(',')],
         p_shapes = [int(i) for i in args.p_shapes.split(',')],
         q_shapes = [int(i) for i in args.q_shapes.split(',')],
-        dist = args.init, 
+        init = args.init, 
         graph = g, 
         device = args.device,
         embed_name = args.emb_name,
@@ -381,6 +420,18 @@ def run_single(train_loader, full_neighbor_loader, data, args):
 
     return best_test_acc
         
+def run_dist_demo(proc_id, nprocs, devices, g, data, args):
+    print(f"Process {proc_id} is using GPU {devices[proc_id]}")
+    # Find corresponding device for current process.
+    device = devices[proc_id]
+    th.cuda.set_device(device)
+    dist.init_process_group(
+        backend="nccl",  # Use NCCL backend for distributed GPU training
+        init_method="tcp://127.0.0.1:12345",
+        world_size=nprocs,
+        rank=proc_id,
+    )
+    
 
 if __name__ == '__main__':
     args = parse_args()
@@ -389,7 +440,7 @@ if __name__ == '__main__':
         device = th.device(args.device)
         devices = list(map(int, args.num_gpus.split(',')))
         nprocs = len(devices)
-        print('Using {} GPUs'.format(nprocs))
+        print('Having {} GPUs. Using {} GPUs'.format(th.cuda.device_count(), nprocs))
     else:
         device = th.device('cpu')
         print("Training with CPU")
@@ -397,32 +448,40 @@ if __name__ == '__main__':
     # load ogbn-products data - dgl version
     # /home/shenghao/gnn_related/dataset
     target_dataset = args.dataset
-    if args.dataset_dir == None:
+    if args.data_dir == None:
         root = os.path.join(os.environ['HOME'], args.workspace, 'gnn_related', 'dataset')
     else:
-        root = args.dataset_dir
+        root = args.data_dir
     
     if args.dist:
         # Distributed Training
-        dataset = AsNodePredDataset(DglNodePropPredDataset(name=target_dataset, root=root))
+        dataset = AsNodePredDataset(DglNodePropPredDataset(name=args.dataset, root=root))
         g = dataset[0]
         print('Begin with Multi GPUs. Init from {}'.format(args.init))
         g.create_formats_() 
+        print("Data loaded")
         if args.dataset == 'ogbn-arxiv':
             g = dgl.to_bidirected(g, copy_ndata=True)
             g = dgl.add_self_loop(g)
-        os.environ['OMP_NUM_THREADS'] = str(mp.cpu_count() // 2 // nprocs)
+        os.environ["OMP_NUM_THREADS"] = str(mp.cpu_count() // 2 // nprocs)
         data = (
             dataset.num_classes,
             dataset.train_idx,
             dataset.val_idx,
             dataset.test_idx,
         )
-        mp.spawn(run, args=(nprocs, devices, g, data, args), nprocs=nprocs)
-        run(proc_id, nprocs, devices, g, data, args)
+
+        # mp.set_sharing_strategy("file_system")
+        mp.spawn(
+            run,
+            args=(nprocs, devices, g, data, args),
+            nprocs=nprocs,
+            join=True
+        )
 
     else:
         # Local single GPU training
+        # g, labels, n_classes, train_nid, val_nid, test_nid, evaluator = load_dataset(device, args)
         train_loader, full_neighbor_loader, data = dgl_graph_loader(target_dataset, root, device, args)
         print('Begin with Single GPU. Init from {}'.format(args.init))
         best_test_acc = run_single(train_loader, full_neighbor_loader, data, args)

@@ -9,9 +9,9 @@ import tqdm
 import torch
 import sys
 from tt_utils import *
-from torch.utils.cpp_extension import load
+# from torch.utils.cpp_extension import load
 from FBTT.tt_embeddings_ops import TTEmbeddingBag
-from Efficient_TT.efficient_tt import Eff_TTEmbedding
+# from Efficient_TT.efficient_tt import Eff_TTEmbedding
 
 # Eff_TT_embedding_cuda = load(name="efficient_tt_table", sources=[
 #     "/home/shenghao/tensor-train-for-gcn/TT4GNN/Efficient_TT/efficient_kernel_wrap.cpp", 
@@ -84,7 +84,7 @@ class SAGE(nn.Module):
         # cache map
         if self.use_cached:
             # default: 10% of the embeddings (num_nodes, also known as num_embeddings)
-            self.cache_size = int(0.1 * cache_size * num_nodes)
+            self.cache_size = int(0.01 * cache_size * num_nodes)
             # default: num_embeddings
             self.hashtbl_size = num_nodes
         else:
@@ -115,15 +115,15 @@ class SAGE(nn.Module):
                 # TODO: hardcoded for the batch_size - default 1024
                 elif self.embed_name == "eff":
                     print("Using Efficient TT")
-                    self.embed_layer = Eff_TTEmbedding(
-                        num_embeddings = num_nodes,
-                        embedding_dim = in_feats,
-                        tt_p_shapes=p_shapes,
-                        tt_q_shapes=q_shapes,
-                        tt_ranks = tt_rank,
-                        weight_dist = "uniform",
-                        batch_size = 1024
-                    ).to(self.device)
+                    # self.embed_layer = Eff_TTEmbedding(
+                    #     num_embeddings = num_nodes,
+                    #     embedding_dim = in_feats,
+                    #     tt_p_shapes=p_shapes,
+                    #     tt_q_shapes=q_shapes,
+                    #     tt_ranks = tt_rank,
+                    #     weight_dist = "uniform",
+                    #     batch_size = 1024
+                    # ).to(self.device)
                 else:
                     print("Unknown embedding type")                                
             
@@ -214,23 +214,22 @@ class SAGE(nn.Module):
         return th.stack(embeddings)
 
     def forward(self, blocks, input_nodes):
-        # h = x
+        # h = input_nodes
         if self.use_tt and self.device.type != 'cpu':
             offsets = th.arange(input_nodes.shape[0] + 1).to(self.device)
             input_nodes = input_nodes.to(self.device)
-            
             if self.use_cached:
                 h = self.embed_layer(input_nodes, offsets)
                 # h = self.embedding_lookup(input_nodes, offsets)
             else:
                 h = self.embed_layer(input_nodes, offsets)
 
-        elif self.device.type == 'cpu':
-            if self.use_cached:
-                # h = self.embed_layer(input_nodes.to(self.device))
-                h = self.embedding_lookup_cpu(input_nodes.to(self.device))
-            else:
-                h = self.embed_layer(input_nodes.to(self.device))
+        # elif self.device.type == 'cpu':
+        #     if self.use_cached:
+        #         # h = self.embed_layer(input_nodes.to(self.device))
+        #         h = self.embedding_lookup_cpu(input_nodes.to(self.device))
+        #     else:
+        #         h = self.embed_layer(input_nodes.to(self.device))
         
         for l, (layer, block) in enumerate(zip(self.layers, blocks)):
             # We need to first copy the representation of nodes on the RHS from the

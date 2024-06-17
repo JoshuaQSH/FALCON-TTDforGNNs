@@ -1,104 +1,161 @@
-import torch as th
+import torch
+import numpy as np
+import pandas as pd
+import scipy.sparse as sp
+import matplotlib.pyplot as plt
 
-from ogb.nodeproppred import PygNodePropPredDataset
-from torch_geometric.loader import NeighborLoader, DataLoader
-import torch_geometric.transforms as T
-from torch_geometric.utils import add_self_loops, to_undirected
+from functools import namedtuple
+from sklearn.metrics import accuracy_score, f1_score
+import community as community_louvain
+from networkx.readwrite import json_graph
 
-from ogb.nodeproppred import DglNodePropPredDataset
+from ogb.nodeproppred import DglNodePropPredDataset, Evaluator
+
 import dgl
+import dgl.function as fn
 from dgl.dataloading import NeighborSampler
 from dgl.distributed import DistGraph, DistDataLoader, node_split
-import numpy as np
-import matplotlib.pyplot as plt
-import community as community_louvain
-import pandas as pd
+from dgl.data import PPIDataset
 
 import os
+import json
 
-def dist_graph_loader(target_dataset, root, device, args):
-    print("Prepare distributed graph data loader for {} dataset".format(target_dataset))
-    
-    # load data
-    graph, label = load_ogb(target_dataset, root)
+def get_evaluator(name):
+    if name in ["cora"]:
+        evaluator = ACCEvaluator()
+    elif name in ["yelp", "ppi", "ppi_large", "reddit", "flickr"]:
+        evaluator = F1Evaluator(average="micro")
+    else:
+        evaluator = get_ogb_evaluator(name)
+    return evaluator
 
-    # initialize distributed contexts
-    # dgl.distributed.initialize('ip_config.txt')
-    # th.distributed.init_process_group(backend='gloo')
+# def load_dataset(device, args):
+#     """
+#     Load dataset and move graph and features to device
+#     """
+#     if args.dataset in ["reddit", "cora", "ppi", "ppi_large", "yelp", "flickr"]:
+#         # raise RuntimeError("Dataset {} is not supported".format(name))
+#         if args.dataset == "reddit":
+#             from dgl.data import RedditDataset
+#             data = RedditDataset(self_loop=True)
+#             g = data[0]
+#             g = dgl.add_self_loop(g)
+#             n_classes = data.num_classes
+#         elif args.dataset == "cora":
+#             from dgl.data import CitationGraphDataset
+#             data = CitationGraphDataset('cora', raw_dir=os.path.join(args.data_dir, 'cora'))
+#             g = data[0]
+#             g = dgl.remove_self_loop(g)
+#             g = dgl.add_self_loop(g)
+#             n_classes = data.num_classes
+#         elif args.dataset == "ppi":
+#             data = load_ppi_data(args.data_dir)
+#             g = data.g
+#             n_classes = data.num_classes
+#         elif args.dataset == "ppi_large":
+#             data = load_ppi_large_data()
+#             g = data.g
+#             n_classes = data.num_classes
+#         elif args.dataset == "yelp":
+#             from torch_geometric.datasets import Yelp
+#             pyg_data = Yelp(os.path.join(args.data_dir, 'yelp'))[0]
+#             feat = pyg_data.x
+#             labels = pyg_data.y
+#             u, v = pyg_data.edge_index
+#             g = dgl.graph((u, v))
+#             g.ndata['feat'] = feat
+#             g.ndata['label'] = labels
+#             g.ndata['train_mask'] = pyg_data.train_mask
+#             g.ndata['val_mask'] = pyg_data.val_mask
+#             g.ndata['test_mask'] = pyg_data.test_mask
+#             n_classes = labels.size(1)
+#         elif args.dataset == "flickr":
+#             from torch_geometric.datasets import Flickr
+#             pyg_data = Flickr(os.path.join(args.data_dir, "flickr"))[0]
+#             feat = pyg_data.x
+#             labels = pyg_data.y
+#             # labels = torch.argmax(labels, dim=1)
+#             u, v = pyg_data.edge_index
+#             g = dgl.graph((u, v))
+#             g.ndata['feat'] = feat
+#             g.ndata['label'] = labels
+#             g.ndata['train_mask'] = pyg_data.train_mask
+#             g.ndata['val_mask'] = pyg_data.val_mask
+#             g.ndata['test_mask'] = pyg_data.test_mask
+#             n_classes = labels.max().item() + 1
+        
+#         train_mask = g.ndata['train_mask']
+#         val_mask = g.ndata['val_mask']
+#         test_mask = g.ndata['test_mask']
+#         train_nid = train_mask.nonzero().squeeze().long()
+#         val_nid = val_mask.nonzero().squeeze().long()
+#         test_nid = test_mask.nonzero().squeeze().long()
+#         g = g.to(device)
+#         labels = g.ndata['label']
 
-    # Partition a graph for distributed training and store the partitions on files.
-    dgl.distributed.partition_graph(graph, 'dict_graph', 2, 
-        num_hops=3, 
-        part_method='metis',
-        out_path='output/', 
-        balance_edges=True)
-    
-    # load distributed graph
-    g = DistGraph('dict_graph', './output/dict_graph.json')
-    pb = g.get_partition_book()
-    train_nid = dgl.distributed.node_split(g.ndata['train_mask'], pb, force_even=True)
-    val_nid = dgl.distributed.node_split(g.ndata['val_mask'], pb, force_even=True)
-    test_nid = dgl.distributed.node_split(g.ndata['test_mask'], pb, force_even=True)
-    # Create sampler
-    sampler = NeighborSampler(g, [int(fanout) for fanout in args.fan_out.split(',')],
-                          dgl.distributed.sample_neighbors,
-                          device)
-    dataloader = DistDataLoader(
-        dataset=train_nid.numpy(),
-        batch_size=args.batch,
-        collate_fn=sampler.sample_blocks,
-        shuffle=True,
-        drop_last=False)
-    
-    return dataloader, g, label
+#     else:
+#         dataset = DglNodePropPredDataset(name=args.dataset, root=args.data_dir)
+#         splitted_idx = dataset.get_idx_split()
+#         train_nid = splitted_idx["train"]
+#         val_nid = splitted_idx["valid"]
+#         test_nid = splitted_idx["test"]
+#         g, labels = dataset[0]
+#         n_classes = dataset.num_classes
+#         g = g.to(device)
 
+#         if args.dataset == "ogbn-arxiv":
+#             g = dgl.add_reverse_edges(g, copy_ndata=True)
+#             g = dgl.add_self_loop(g)
+#             g.ndata['feat'] = g.ndata['feat'].float()
 
+#         elif args.dataset == "ogbn-papers100M":
+#             g = dgl.add_reverse_edges(g, copy_ndata=True)
+#             g.ndata['feat'] = g.ndata['feat'].float()
+#             labels = labels.long()
 
-def load_reddit(self_loop=True):
-    from dgl.data import RedditDataset
+#         elif args.dataset == "ogbn-mag":
+#             # MAG is a heterogeneous graph. The task is to make prediction for
+#             # paper nodes
+#             path = os.path.join(args.emb_path, f"{args.pretrain_model}_mag")
+#             labels = labels["paper"]
+#             train_nid = train_nid["paper"]
+#             val_nid = val_nid["paper"]
+#             test_nid = test_nid["paper"]
+#             features = g.nodes['paper'].data['feat']
+#             author_emb = torch.load(os.path.join(path, "author.pt"), map_location=torch.device("cpu")).float()
+#             topic_emb = torch.load(os.path.join(path, "field_of_study.pt"), map_location=torch.device("cpu")).float()
+#             institution_emb = torch.load(os.path.join(path, "institution.pt"), map_location=torch.device("cpu")).float()
 
-    # load reddit data
-    data = RedditDataset(self_loop=self_loop)
-    g = data[0]
-    g.ndata['features'] = g.ndata.pop('feat')
-    g.ndata['labels'] = g.ndata.pop('label')
-    return g, data.num_classes
+#             g.nodes["author"].data["feat"] = author_emb.to(device)
+#             g.nodes["institution"].data["feat"] = institution_emb.to(device)
+#             g.nodes["field_of_study"].data["feat"] = topic_emb.to(device)
+#             g.nodes["paper"].data["feat"] = features.to(device)
+#             paper_dim = g.nodes["paper"].data["feat"].shape[1]
+#             author_dim = g.nodes["author"].data["feat"].shape[1]
+#             if paper_dim != author_dim:
+#                 paper_feat = g.nodes["paper"].data.pop("feat")
+#                 rand_weight = torch.Tensor(paper_dim, author_dim).uniform_(-0.5, 0.5)
+#                 g.nodes["paper"].data["feat"] = torch.matmul(paper_feat, rand_weight.to(device))
+#                 print(f"Randomly project paper feature from dimension {paper_dim} to {author_dim}")
 
-def load_ogb(name, root='dataset'):
-    
-    print('load', name)
-    data = DglNodePropPredDataset(name=name, root=root)
-    print('finish loading', name)
-    splitted_idx = data.get_idx_split()
-    graph, labels = data[0]
-    labels = labels[:, 0]
+#             labels = labels.to(device).squeeze()
+#             n_classes = int(labels.max() - labels.min()) + 1
+        
+#         else:
+#             g.ndata['feat'] = g.ndata['feat'].float()
 
-    graph.ndata['features'] = graph.ndata.pop('feat')
-    graph.ndata['labels'] = labels
-    in_feats = graph.ndata['features'].shape[1]
-    num_labels = len(th.unique(labels[th.logical_not(th.isnan(labels))]))
+#         labels = labels.squeeze()
 
-    # Find the node IDs in the training, validation, and test set.
-    train_nid, val_nid, test_nid = splitted_idx['train'], splitted_idx['valid'], splitted_idx['test']
-    train_mask = th.zeros((graph.number_of_nodes(),), dtype=th.bool)
-    train_mask[train_nid] = True
-    val_mask = th.zeros((graph.number_of_nodes(),), dtype=th.bool)
-    val_mask[val_nid] = True
-    test_mask = th.zeros((graph.number_of_nodes(),), dtype=th.bool)
-    test_mask[test_nid] = True
-    graph.ndata['train_mask'] = train_mask
-    graph.ndata['val_mask'] = val_mask
-    graph.ndata['test_mask'] = test_mask
-    print('finish constructing', name)
-    return graph, num_labels
+#     evaluator = get_evaluator(args.dataset)
 
-def inductive_split(g):
-    """Split the graph into training graph, validation graph, and test graph by training
-    and validation masks.  Suitable for inductive models."""
-    train_g = g.subgraph(g.ndata['train_mask'])
-    val_g = g.subgraph(g.ndata['train_mask'] | g.ndata['val_mask'])
-    test_g = g
-    return train_g, val_g, test_g
+#     print(f"# Nodes: {g.number_of_nodes()}\n"
+#           f"# Edges: {g.number_of_edges()}\n"
+#           f"# Train: {len(train_nid)}\n"
+#           f"# Val: {len(val_nid)}\n"
+#           f"# Test: {len(test_nid)}\n"
+#           f"# Classes: {n_classes}")
+
+#     return g, labels, n_classes, train_nid, val_nid, test_nid, evaluator
 
 def dgl_graph_loader(target_dataset, root, device, args):
     # load data
@@ -107,30 +164,37 @@ def dgl_graph_loader(target_dataset, root, device, args):
     splitted_idx = data.get_idx_split()
     train_idx, val_idx, test_idx = splitted_idx['train'], splitted_idx['valid'], splitted_idx['test']
     graph, labels = data[0]
-
-    # add reverse edges
-    # print('add reversed edges')
-    srcs, dsts = graph.all_edges()
+    n_classes = data.num_classes
     
-    if target_dataset != 'ogbn-paper100M':
+    
+    if target_dataset != 'ogbn-papers100M':
+        print('add reversed edges')
+        srcs, dsts = graph.all_edges()
         graph.add_edges(dsts, srcs)
-    # graph.add_edges(dsts, srcs)
-
-    nfeat = graph.ndata.pop('feat')
-
+        labels = labels[:, 0]
     
-    labels = labels[:, 0]
+    else:
+        print('Dealing with papers100M')
+        graph = dgl.add_reverse_edges(graph, copy_ndata=True)
+        graph.ndata['feat'] = graph.ndata['feat'].float()
+        labels = labels.long()
+    nfeat = graph.ndata.pop('feat')
+    
     print("train idx shape (DGL): ", train_idx.shape)
     print("nfeat shape (DGL): ", nfeat.shape)
     print("labels shape (DGL): ", labels.shape)
-    print("degree (DGL): ", graph.in_degrees())
+    # print("degree (DGL): ", graph.in_degrees())
 
     if args.plot:
+        thread_sum = 0
+        for threshold in torch.nonzero(torch.bincount(graph.in_degrees())[100:]):
+            thread_sum += torch.bincount(graph.in_degrees())[100+threshold[0]]
+        print("---- The number of nodes with degree > 100: ", thread_sum.item())
         plt.rc('xtick', labelsize=20) 
         plt.rc('ytick', labelsize=20) 
         plt.rcParams.update({'font.size': 22})
         plt.figure(figsize=(12, 6))
-        plt.plot(th.arange(len(graph.in_degrees())),  graph.in_degrees())
+        plt.plot(torch.arange(len(graph.in_degrees())),  graph.in_degrees())
         plt.xlabel('Node Index')
         plt.ylabel('# degree')
         plt.title('Graph Degree Distribution')
@@ -141,25 +205,25 @@ def dgl_graph_loader(target_dataset, root, device, args):
     # print(f"Total edges before adding self-loop {graph.number_of_edges()}")
     # graph = graph.remove_self_loop().add_self_loop()
     # print(f"Total edges after adding self-loop {graph.number_of_edges()}")
-
     in_feats = nfeat.shape[1]
-    n_classes = (labels.max() + 1).item()
+    
+    # n_classes = (labels.max() + 1).item()
 
     # Create csr/coo/csc formats before launching sampling processes
-    graph.create_formats_()
+    # graph.create_formats_()
     for i in range(int(args.n_runs)):
         if args.partition != 0:
             print("Do the graph partitioning")
             graph, labels, train_idx, val_idx, test_idx = dgl_partition(graph, labels, train_idx, val_idx, test_idx, args.partition)
         else:
             print("no graph partition")
-        num_feat = th.arange(graph.number_of_nodes()).to(device)
+        num_feat = torch.arange(graph.number_of_nodes()).to(device)
         labels = labels.to(device)
 
         data = train_idx, val_idx, test_idx, in_feats, labels, n_classes, num_feat, graph
     
     # Pack data
-    num_feat = th.arange(graph.number_of_nodes())
+    num_feat = torch.arange(graph.number_of_nodes())
     data = train_idx, val_idx, test_idx, in_feats, labels, n_classes, num_feat, graph
     print("DGL Data packed!")
     
@@ -194,7 +258,7 @@ def dgl_unpack_data(data, args):
     sampler_all = dgl.dataloading.MultiLayerFullNeighborSampler(1)
     full_neighbor_loader = dgl.dataloading.DataLoader(
                 g,
-                th.arange(g.num_nodes()),
+                torch.arange(g.num_nodes()),
                 sampler_all,
                 batch_size=args.batch,
                 shuffle=False,
@@ -337,9 +401,9 @@ def dgl_partition(graph, labels, train_idx, val_idx, test_idx, partition):
     val_mask[val_idx] = True
     test_mask = np.zeros(num_nodes, dtype=bool)
     test_mask[test_idx] = True
-    graph.ndata['train_mask'] = th.tensor(train_mask)
-    graph.ndata['val_mask'] = th.tensor(val_mask)
-    graph.ndata['test_mask'] = th.tensor(test_mask)
+    graph.ndata['train_mask'] = torch.tensor(train_mask)
+    graph.ndata['val_mask'] = torch.tensor(val_mask)
+    graph.ndata['test_mask'] = torch.tensor(test_mask)
 
     if partition != 0:
         
@@ -363,80 +427,20 @@ def dgl_partition(graph, labels, train_idx, val_idx, test_idx, partition):
 
         else:
             print("Randomly permute the node order first")
-            nodes_perm = th.randperm(graph.num_nodes())
+            nodes_perm = torch.randperm(graph.num_nodes())
             par_g = dgl.reorder_graph(graph, 'custom', permute_config={'nodes_perm':nodes_perm})
             print("Partition graph by METIS into {} parts".format(partition))
             par_g = dgl.reorder_graph(graph, 'metis', permute_config={'k':partition})
 
     else:
         print("Randomly permute the node order")
-        nodes_perm = th.randperm(graph.num_nodes())
+        nodes_perm = torch.randperm(graph.num_nodes())
         par_g = dgl.reorder_graph(graph, 'custom', permute_config={'nodes_perm':nodes_perm})
     
     graph = par_g
-    train_idx = th.tensor(np.where(graph.ndata['train_mask'] == True))[0, :]
-    val_idx = th.tensor(np.where(graph.ndata['val_mask'] == True))[0, :]
-    test_idx = th.tensor(np.where(graph.ndata['test_mask'] == True))[0, :]
+    train_idx = torch.tensor(np.where(graph.ndata['train_mask'] == True))[0, :]
+    val_idx = torch.tensor(np.where(graph.ndata['val_mask'] == True))[0, :]
+    test_idx = torch.tensor(np.where(graph.ndata['test_mask'] == True))[0, :]
     labels = graph.ndata['label']
 
     return graph, labels, train_idx, val_idx, test_idx
-
-# load ogbn-xxx graph data - pyg version
-def graph_loader(target_dataset, root, args):
-    
-    if target_dataset == 'ogbn-products':
-        dataset = PygNodePropPredDataset(name=target_dataset, root=root, transform=T.ToUndirected())
-        # Get the first graph object, which in this case is the entire dataset
-        data = dataset[0]
-
-        # Add self-loops to the edges and convert to undirected
-        data.edge_index = add_self_loops(data.edge_index, num_nodes=data.num_nodes)[0]
-        data.edge_index = to_undirected(data.edge_index, num_nodes=data.num_nodes)
-
-        # Data preparation
-        nfeat = data.x
-        labels = data.y.squeeze()
-
-        # Extracting the number of features and classes
-        in_feats = nfeat.size(1)
-        n_classes = int(labels.max()) + 1
-
-        split_idx = dataset.get_idx_split()
-        train_idx, valid_idx, test_idx = split_idx['train'], split_idx['valid'], split_idx['test']
-        if args.use_sample:
-            train_loader = NeighborLoader(data, input_nodes=train_idx,
-                                        shuffle=True, num_workers=os.cpu_count() - 2,
-                                        batch_size=args.batch, num_neighbors=[args.sample] * args.neighbors)
-
-        else:
-            # Batch size of 1 because we have only one graph
-            train_loader = DataLoader([data], batch_size=args.batch, shuffle=True)
-        
-        total_loader = NeighborLoader(data, input_nodes=None, num_neighbors=[-1],
-                                batch_size=args.batch, shuffle=False,
-                                num_workers=os.cpu_count() - 2)
-
-    elif target_dataset == 'ogbn-arxiv':
-        dataset = PygNodePropPredDataset(name=target_dataset, root=root)
-        # Get the first graph object, which in this case is the entire dataset
-        data = dataset[0]
-        split_idx = dataset.get_idx_split() 
-                
-        train_idx = split_idx['train']
-        valid_idx = split_idx['valid']
-        test_idx = split_idx['test']
-        
-        if args.use_sample:
-            train_loader = NeighborLoader(data, input_nodes=train_idx,
-                                        shuffle=True, num_workers=os.cpu_count() - 2,
-                                        batch_size=args.batch, num_neighbors=[args.sample] * args.neighbors)
-
-        else:
-            # Batch size of 1 because we have only one graph
-            train_loader = DataLoader([data], batch_size=args.batch, shuffle=True)
-        
-        total_loader = NeighborLoader(data, input_nodes=None, num_neighbors=[-1],
-                                batch_size=args.batch, shuffle=False,
-                                num_workers=os.cpu_count() - 2)
-        
-    return dataset, data, train_loader, total_loader, train_idx, valid_idx, test_idx, split_idx

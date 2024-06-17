@@ -4,10 +4,10 @@ import time
 import scipy
 
 import sys
-sys.path.insert(0, '/home/shenghao/FBTT-Embedding')
-sys.path.insert(0, '/home/shenghao/home-3090/FBTT-Embedding')
-from tt_embeddings_ops import TTEmbeddingBag
-from tt_embeddings_ops import tt_matrix_to_full
+# sys.path.insert(0, '/home/shenghao/FBTT-Embedding')
+# sys.path.insert(0, '/home/shenghao/home-3090/FBTT-Embedding')
+# from tt_embeddings_ops import TTEmbeddingBag
+# from tt_embeddings_ops import tt_matrix_to_full
 import torch.nn.init as init
 
 from collections import OrderedDict
@@ -66,7 +66,7 @@ def parse_args():
     parser.add_argument('--save-pred', type=str, default='')
     parser.add_argument('--wd', type=float, default=0)
     parser.add_argument('--workspace', type=str, default='')
-    parser.add_argument('--dataset-dir', type=str, default=None)
+    parser.add_argument('--data-dir', type=str, default='/home/shenghao/gnn_related/dataset')
     parser.add_argument('--access-counts', action="store_true", help="Whether to count the access times of embeddings.")
     parser.add_argument('--use-cached', action="store_true", help="Caching the embeddings.")
     parser.add_argument('--skip-eval', action="store_true", help="Skip the evaluation part. (profiling only)")
