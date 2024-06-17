@@ -118,7 +118,7 @@ def train(train_loader, model, loss_fcn, optimizer, lr_scheduler, nfeat, labels,
     
     return ave_forward_throughput, ave_backward_throughput, iter_tput
 
-def evaluate(device, model, g, num_classes, dataloader):
+def evaluate_dist(device, model, g, num_classes, dataloader):
     model.eval()
     ys = []
     y_hats = []
@@ -180,7 +180,7 @@ def train_dist(proc_id, nprocs, device, g, num_classes, train_idx, val_idx, mode
             total_loss += loss
 
         acc = (
-            evaluate(device, model, g, num_classes, val_loader).to(device) / nprocs
+            evaluate_dist(device, model, g, num_classes, val_loader).to(device) / nprocs
         )
         dist.reduce(tensor=acc, dst=0)
         if proc_id == 0:
