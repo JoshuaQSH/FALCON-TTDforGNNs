@@ -131,9 +131,11 @@ def give_record(per_epoch_time, total_time, iter_tput, args, tt_rank, log=None):
         print('Avg overall throughput is {:.4f}'.format(np.mean(iter_tput[:])))
         print('TT Ranks: {}'.format(tt_rank))
 
-def model_tuner(weights_1, weights_2, weights_3, tt_rank, data, args):
+# weights_1, weights_2, weights_3, tt_rank, data, args
+def model_tuner(tt_rank, data, args):
     train_nid, val_nid, test_nid, in_feats, labels, n_classes, nfeat, g = data
     device = th.device(args.device)
+
     model = SAGE(
         num_nodes = g.number_of_nodes(), 
         in_feats = in_feats, 
@@ -143,7 +145,7 @@ def model_tuner(weights_1, weights_2, weights_3, tt_rank, data, args):
         activation = F.relu, 
         dropout = args.dropout, 
         use_tt = args.use_tt, 
-        tt_rank = tt_rank,
+        tt_rank = [tt_rank[0],tt_rank[0]],
         p_shapes = [int(i) for i in args.p_shapes.split(',')],
         q_shapes = [int(i) for i in args.q_shapes.split(',')],
         init = args.init, 
@@ -155,7 +157,7 @@ def model_tuner(weights_1, weights_2, weights_3, tt_rank, data, args):
         cache_size = args.cache_size,
         sparse = args.sparse,
         batch_count = args.batch_count,
-        weights_init = (weights_1, weights_2, weights_3),
+        # weights_init = (weights_1, weights_2, weights_3),
     )
     model = model.to(device)
     loss_fcn = nn.CrossEntropyLoss()
@@ -187,7 +189,7 @@ def model_tuner(weights_1, weights_2, weights_3, tt_rank, data, args):
     # give_record(per_epoch_time, total_time, iter_tput, args, args.tt_rank, log)
     
     # Nevergrad could minimize the [loss, time, throughput]
-    return loss.item()
+    return 1 / avg_througput
 
 def run_single(train_loader, full_neighbor_loader, data, args):
     # Logging
@@ -205,25 +207,27 @@ def run_single(train_loader, full_neighbor_loader, data, args):
         log = None
 
     # Unpack data
-    # train_nid, val_nid, test_nid, in_feats, labels, n_classes, nfeat, g = data
+    #train_nid, val_nid, test_nid, in_feats, labels, n_classes, nfeat, g = data
 
     # Define model and optimizer
-    # tt_rank = ng.ops.Int(deterministic=True)(ng.p.Array(shape=(2,), lower=8, upper=16))
-    tt_rank = [int(i) for i in args.tt_rank.split(',')]
+    tt_rank = ng.ops.Int(deterministic=True)(ng.p.Array(shape=(1,), lower=2, upper=256))
+    # tt_rank = [int(i) for i in args.tt_rank.split(',')]
     p_shapes = [int(i) for i in args.p_shapes.split(',')]
     q_shapes = [int(i) for i in args.q_shapes.split(',')]
-    weights_1, weights_2, weights_3 = create_3d_weight_parameters(p_shapes, q_shapes, tt_rank, distribution='normal')
-    instru = ng.p.Instrumentation(weights_1, weights_2, weights_3)
+    # weights_1, weights_2, weights_3 = create_3d_weight_parameters(p_shapes, q_shapes, tt_rank, distribution='normal')
+    # instru = ng.p.Instrumentation(weights_1, weights_2, weights_3)
+    instru = ng.p.Instrumentation(tt_rank)
     budget = 20
     # names = ["RandomSearch", "TwoPointsDE", "CMA", "PSO", "ScrHammersleySearch"]
-    names = ["RandomSearch", "TwoPointsDE"]
+    # names = ["RandomSearch", "TwoPointsDE"]
+    names = ["CMA", "PSO", "ScrHammersleySearch"]
     for name in names:
         optim = ng.optimizers.registry[name](parametrization=instru, budget=budget, num_workers=1)
         for u in range(budget):
             x1 = optim.ask()
             # x2 = optim.ask()
             # x3 = optim.ask()
-            y1 = model_tuner(*x1.args, tt_rank, data, args)
+            y1 = model_tuner(*x1.args, data, args)
             # y2 = model_tuner(*x2.args, tt_rank, data, args)
             # y3 = model_tuner(*x3.args, tt_rank, data, args)
             optim.tell(x1, y1)
@@ -231,7 +235,7 @@ def run_single(train_loader, full_neighbor_loader, data, args):
             # optim.tell(x3, y3)
     recommendation = optim.recommend()
     print("* ", name, " provides a vector of parameters with test error ",
-          model_tuner(*recommendation.args, tt_rank, data, args))
+          model_tuner(*recommendation.args, data, args))
     
     return recommendation
         
@@ -251,10 +255,10 @@ if __name__ == '__main__':
     # load ogbn-products data - dgl version
     # /home/shenghao/gnn_related/dataset
     target_dataset = args.dataset
-    if args.dataset_dir == None:
+    if args.data_dir == None:
         root = os.path.join(os.environ['HOME'], args.workspace, 'gnn_related', 'dataset')
     else:
-        root = args.dataset_dir
+        root = args.data_dir
 
     # Local single GPU training
     train_loader, full_neighbor_loader, data = dgl_graph_loader(target_dataset, root, device, args)

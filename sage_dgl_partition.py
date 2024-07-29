@@ -21,7 +21,8 @@ import tqdm
 
 from tt_utils import *
 from utils import Logger, gpu_timing, memory_usage, calculate_access_percentages, plot_access_percentages
-from dgl_sage import SAGE
+# from dgl_sage import SAGE
+from gnn_model import SAGE
 from graphloader import dgl_graph_loader
 
 from dgl.dataloading import (
@@ -268,7 +269,7 @@ def run_single(train_loader, full_neighbor_loader, data, args):
     else:
         is_cached = 'uncached'
     # saved_log_name = saved_log_path + '{}-{}-{}-{}-batch-{}-par-{}-{}.log'.format(args.model, args.device, is_sample, args.fan_out, args.batch, args.partition, timestamp)
-    # saved_log_name = saved_log_path + 'TTRank-{}-{}.log'.format(args.tt_rank, timestamp)
+    # saved_log_name = saved_log_path + 'TTRankScale(productB-papersF)-{}-{}-{}-{}.log'.format(args.tt_rank, args.model, args.dataset, timestamp)
     # saved_log_name = saved_log_path + 'DiffRankPshape-{}-{}-{}.log'.format(args.tt_rank, args.p_shapes, timestamp)
     # saved_log_name = saved_log_path + 'Partition-{}-{}-{}.log'.format(args.partition, args.batch, timestamp)
     # saved_log_name = saved_log_path + 'MotiTest-{}-{}-{}.log'.format(args.dataset, args.batch, timestamp)
@@ -352,7 +353,8 @@ def run_single(train_loader, full_neighbor_loader, data, args):
             print(f"Access counts after epoch {epoch}: {access_counts}")
             access_percentages = calculate_access_percentages(access_counts, plot_name=f"embaccess_{args.dataset}_{args.batch}.pdf")
             print(f"Access percentages after epoch {epoch}: {access_percentages}")
-            plot_access_percentages(access_percentages, plot_name=f"emb_row_access_epoch_{epoch}.pdf")
+            # plot_access_percentages(access_percentages, plot_name=f"emb_row_access_epoch_{epoch}.pdf")
+            plot_cumulative_access_percentages(access_percentages, plot_name=f"cumulative_access_epoch_{epoch}.pdf")
 
         if epoch == 0 and args.use_cached:
             # cache update

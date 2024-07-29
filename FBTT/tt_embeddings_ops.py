@@ -560,7 +560,7 @@ class TableBatchedTTEmbeddingBag(torch.nn.Module):
         
         if use_cache:
             if cache_size <= 0:
-                cache_size = int(0.01 * self.num_embeddings)
+                cache_size = int(0.1 * self.num_embeddings)
             if hashtbl_size <= 0:
                 hashtbl_size = self.num_embeddings
             assert hashtbl_size >= cache_size

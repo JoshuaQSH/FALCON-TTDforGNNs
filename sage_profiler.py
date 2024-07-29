@@ -19,7 +19,7 @@ import os
 from tt_utils import *
 from utils import Logger, gpu_timing, memory_usage, calculate_access_percentages, plot_access_percentages
 
-# from dgl_sage import SAGE
+# from gnn_model import SAGE
 from graphloader import dgl_graph_loader
 
 from FBTT.tt_embeddings_ops import (
@@ -60,6 +60,14 @@ def create_block(num_src_nodes, num_dst_nodes, num_edges):
 
     return block
 
+# Function to create a DGL graph
+def create_graph(num_src_nodes, num_dst_nodes, num_edges):
+    src_nodes = torch.randint(0, num_src_nodes, (num_edges,))
+    dst_nodes = torch.randint(0, num_dst_nodes, (num_edges,))
+    graph = dgl.graph((src_nodes, dst_nodes))
+    
+    return graph
+
 def generate_sparse_feature(
     batch_size,
     num_embeddings: int,
@@ -90,6 +98,17 @@ def generate_sparse_feature(
         scores = []
     offsets = [0] + list(np.cumsum(lengths))
     return (lengths, indices, offsets, scores)
+
+# Hook to track input indices of the embedding layer
+embedding_indices = []
+
+# Hook to track indices
+def hook(module, input, output):
+    global embedding_indices
+    # print("Layer: ", module)
+    print("Input nodes: ", input[0].cpu().numpy() if isinstance(input[0], torch.Tensor) else [i.cpu().numpy() for i in input])
+    print("Output size: ", output.size())
+
 
 class SAGE_ONLY(nn.Module):
     def __init__(self,
@@ -160,16 +179,22 @@ class SAGE(nn.Module):
                  embed_name ='fbtt',
                  access_counts=False,
                  use_cached=False,
-                 cache_size=0):
+                 cache_size=0,
+                 batch_count=1000):
         super().__init__()
         self.n_layers = n_layers
         self.n_hidden = n_hidden
         self.n_classes = n_classes
         self.layers = nn.ModuleList()
-        self.layers.append(dglnn.SAGEConv(in_feats, n_hidden, 'mean'))
-        for i in range(1, n_layers - 1):
-            self.layers.append(dglnn.SAGEConv(n_hidden, n_hidden, 'mean'))
-        self.layers.append(dglnn.SAGEConv(n_hidden, n_classes, 'mean'))
+        
+        if n_layers > 1:
+            self.layers.append(dglnn.SAGEConv(in_feats, n_hidden, 'mean'))
+            for i in range(1, n_layers - 1):
+                self.layers.append(dglnn.SAGEConv(n_hidden, n_hidden, 'mean'))
+            self.layers.append(dglnn.SAGEConv(n_hidden, n_classes, 'mean'))
+        elif n_layers == 1:
+            self.layers.append(dglnn.SAGEConv(in_feats, n_classes, 'mean'))
+
         self.dropout = nn.Dropout(dropout)
         self.activation = activation
         self.num_nodes= num_nodes
@@ -181,7 +206,6 @@ class SAGE(nn.Module):
         self.cache_size = int(0.1 * cache_size * num_nodes)
         # default: num_embeddings
         self.hashtbl_size = num_nodes
-
         if use_tt:
             self.embed_layer = TTEmbeddingBag(
                     num_embeddings=num_nodes,
@@ -193,7 +217,8 @@ class SAGE(nn.Module):
                     use_cache=False,
                     cache_size=self.cache_size,
                     hashtbl_size=self.hashtbl_size,
-                    weight_dist="normal")
+                    weight_dist="normal",
+                    batch_count=batch_count,)
         else:
             self.embed_layer = torch.nn.Embedding(num_nodes, in_feats)                      
 
@@ -205,13 +230,17 @@ class SAGE(nn.Module):
 
         else:
             h = self.embed_layer(input_nodes.to(self.device))
-        
-        for l, (layer, block) in enumerate(zip(self.layers, blocks)):
-            h_dst = h[:block.num_dst_nodes()]
-            h = layer(block, (h, h_dst))
-            if l != len(self.layers) - 1:
-                h = self.activation(h)
-                h = self.dropout(h)
+        if self.n_layers == 1:
+            h = self.layers[0](blocks, h)
+            h = self.activation(h)
+            h = self.dropout(h)
+        else:
+            for l, (layer, block) in enumerate(zip(self.layers, blocks)):
+                h_dst = h[:block.num_dst_nodes()]
+                h = layer(block, (h, h_dst))
+                if l != len(self.layers) - 1:
+                    h = self.activation(h)
+                    h = self.dropout(h)
         return h
 
 class TestTTEmbeddingBag(unittest.TestCase):
@@ -240,6 +269,7 @@ class TestTTEmbeddingBag(unittest.TestCase):
         # create TT-Embedding op
         offsets = torch.tensor(offsets, dtype=torch.int64, device=self.device)
         indices = torch.tensor(indices, dtype=torch.int64, device=self.device)
+        batch_count = 1000
         
         if self.use_tt:
             tt_emb = TTEmbeddingBag(
@@ -251,6 +281,7 @@ class TestTTEmbeddingBag(unittest.TestCase):
                 sparse=False,
                 use_cache=False,
                 weight_dist="uniform",
+                batch_count=batch_count,
             )
             tt_emb.to(self.device)
             output = tt_emb(indices, offsets)
@@ -548,7 +579,63 @@ def test_sage_tt_fwd(block, input_nodes, offsets, ctx, args):
     end = time.time()
     print("SAGE fwd time: %.2fs" % (end - start))
 
-def run_one(train_loader, data, args):
+def graph_to_block(graph):
+    src, dst = graph.edges()
+    
+    # Create a DGL block
+    block = dgl.heterograph(
+        {('_N', '_E', '_N'): (src, dst)},
+        num_nodes_dict={'_N': graph.number_of_nodes()}
+    )
+    
+    # Copy node and edge data from the original graph to the block
+    for key, value in graph.ndata.items():
+        block.srcdata[key] = value
+    for key, value in graph.edata.items():
+        block.edata[key] = value    
+    return block
+
+
+def reorder_block_with_metis(block):
+    src, dst = block.edges()
+    
+    # Create a subgraph from the block
+    subgraph = dgl.graph((src, dst), num_nodes=block.number_of_src_nodes())
+    subgraph.ndata[dgl.NID] = block.srcdata[dgl.NID]
+    subgraph.edata[dgl.EID] = block.edata[dgl.EID]
+    
+    # Apply METIS partitioning to reorder the subgraph
+    partitioned_subgraph = dgl.reorder_graph(subgraph, 'metis', permute_config={'k':3})
+    # partitioned_subgraph = transform.metis_partition(subgraph, k=1)[0]
+    
+    # Get the reordered node indices
+    reordered_indices = partitioned_subgraph.ndata[dgl.NID]
+    
+    # Create a mapping from the reordered indices to the original node IDs
+    original_indices = block.srcdata[dgl.NID][reordered_indices]
+    
+    # Reorder block node and edge data
+    reordered_srcdata = {key: block.srcdata[key][reordered_indices] for key in block.srcdata.keys()}
+    reordered_dstdata = {key: block.dstdata[key][reordered_indices] for key in block.dstdata.keys()}
+    reordered_edata = {key: block.edata[key] for key in block.edata.keys()}
+
+    # Create a reordered block
+    reordered_block = dgl.heterograph(
+        {('_N', '_E', '_N'): (partitioned_subgraph.edges()[0], partitioned_subgraph.edges()[1])},
+        num_nodes_dict={'_N': block.number_of_nodes()}
+    )
+
+    # Assign reordered node and edge data
+    for key, value in reordered_srcdata.items():
+        reordered_block.srcdata[key] = value
+    for key, value in reordered_dstdata.items():
+        reordered_block.dstdata[key] = value
+    for key, value in reordered_edata.items():
+        reordered_block.edata[key] = value
+
+    return reordered_block, original_indices
+
+def run_one_sage(train_loader, data, args):
     # Unpack data
     train_nid, val_nid, test_nid, in_feats, labels, n_classes, nfeat, g = data
 
@@ -560,7 +647,7 @@ def run_one(train_loader, data, args):
         in_feats = in_feats, 
         n_hidden = args.num_hidden, 
         n_classes = n_classes, 
-        n_layers = args.num_layers, 
+        n_layers = args.num_layers,
         activation = F.relu, 
         dropout = args.dropout, 
         use_tt = args.use_tt, 
@@ -573,7 +660,8 @@ def run_one(train_loader, data, args):
         embed_name = args.emb_name,
         access_counts=args.access_counts,
         use_cached=args.use_cached,
-        cache_size = args.cache_size)
+        cache_size = args.cache_size,
+        batch_count = args.batch_count)
     
     model = model.to(device)
 
@@ -583,26 +671,120 @@ def run_one(train_loader, data, args):
                                                                   patience=800, verbose=True)
     
     iter_dataloader = iter(train_loader)
-    input_nodes, seeds, blocks = next(iter_dataloader)    
+
+    input_nodes, seeds, blocks = next(iter_dataloader)
     blocks = [blk.int().to(device) for blk in blocks]
+
+
+    ### Partitioning the graph
+    blocks = [blk.int() for blk in blocks]
+    first_block = blocks[0]
+    block = blocks[0]
+    subgraph = dgl.block_to_graph(first_block)
+    subgraph = dgl.graph((first_block.edges()[0], first_block.edges()[1]), idtype=th.int64)
+    partitioned_subgraph = dgl.reorder_graph(subgraph, 'metis', permute_config={'k':100})
+    reordered_indices = partitioned_subgraph.ndata[dgl.NID]
+    block = dgl.to_block(partitioned_subgraph, dst_nodes=partitioned_subgraph.ndata[dgl.NID], src_nodes=first_block.srcdata[dgl.NID])
+    block = block.to(device)
+
+
+    ### Running all the blocks, too slow...
     batch_inputs = nfeat[input_nodes]
     batch_labels = labels[seeds]
     batch_labels = batch_labels.to(device)
-    
-    offsets = torch.arange(input_nodes.shape[0] + 1).to(device)
-    input_nodes = input_nodes.to(device)
 
+    # batch_inputs = nfeat[reordered_indices]
+    batch_inputs = batch_inputs.to(device)
+
+    start_time = time.time()
     print("input nodes Shape: ", input_nodes.shape)
     batch_pred = model(blocks, batch_inputs)
     print("batch output Shape: ", batch_pred.shape)
+    print("FWD Runtime: ", time.time() - start_time)
     
+    start_time_bwd = time.time()
     loss = loss_fcn(batch_pred, batch_labels)
     optimizer.zero_grad()
     loss.backward()
     optimizer.step()
     lr_scheduler.step(loss)
-
+    print("BWD Runtime: ", time.time() - start_time_bwd)
+    print("Total Runtime: ", time.time() - start_time)
     print("--- Run Once Done! ---")
+
+def run_one(train_loader, data, args, total_time=[]):
+    # Unpack data
+    train_nid, val_nid, test_nid, in_feats, labels, n_classes, nfeat, g = data
+
+    # Define model and optimizer
+    device = torch.device(args.device)
+    
+    model = SAGE(
+        num_nodes = g.number_of_nodes(), 
+        in_feats = in_feats, 
+        n_hidden = args.num_hidden, 
+        n_classes = n_classes, 
+        n_layers = args.num_layers,
+        activation = F.relu, 
+        dropout = args.dropout, 
+        use_tt = args.use_tt, 
+        tt_rank = [int(i) for i in args.tt_rank.split(',')],
+        p_shapes = [int(i) for i in args.p_shapes.split(',')],
+        q_shapes = [int(i) for i in args.q_shapes.split(',')],
+        dist = args.init, 
+        graph = g, 
+        device = args.device,
+        embed_name = args.emb_name,
+        access_counts=args.access_counts,
+        use_cached=args.use_cached,
+        cache_size = args.cache_size,
+        batch_count = args.batch_count)
+    
+    model = model.to(device)
+
+    loss_fcn = nn.CrossEntropyLoss()
+    optimizer = optim.Adam(model.parameters(), lr=args.lr, weight_decay=args.wd)
+    lr_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer=optimizer, factor=0.8,
+                                                                  patience=800, verbose=True)
+    
+    # model.embed_layer.register_forward_hook(hook)
+    # epoch_start_time = time.time()
+    for step, (input_nodes, seeds, blocks) in enumerate(train_loader):
+        
+        sorted_input_nodes, sorted_indices = torch.sort(input_nodes)
+
+        blocks = [blk.int().to(device) for blk in blocks]
+        batch_inputs = nfeat[input_nodes]
+        batch_labels = labels[seeds]
+        batch_labels = batch_labels.to(device)
+        batch_inputs = batch_inputs.to(device)
+        
+        start_time = time.time()
+        # print("input nodes Shape: ", input_nodes.shape)
+        batch_pred = model(blocks, batch_inputs)
+
+        ### Analyze the embedding indices for continuity
+        embedding_indices_sorted = np.sort(embedding_indices)
+        
+        # print("batch output Shape: ", batch_pred.shape)
+        # print("FWD Runtime: ", time.time() - start_time)
+        
+        start_time_bwd = time.time()
+        loss = loss_fcn(batch_pred, batch_labels)
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+        lr_scheduler.step(loss)
+
+        total_time.append(time.time() - start_time)
+        break
+        # print("BWD Runtime: ", time.time() - start_time_bwd)
+        # print("Total Runtime: ", time.time() - start_time)
+        
+    
+    # print("Epoch Stop Total Runtime: ", time.time() - epoch_start_time)
+    # print("--- Run Once Done! ---")
+    return total_time
 
 if __name__ == '__main__':
     args = parse_args()
@@ -613,10 +795,10 @@ if __name__ == '__main__':
         device = torch.device('cpu')
 
     target_dataset = args.dataset
-    if args.dataset_dir == None:
+    if args.workspace is not None:
         root = os.path.join(os.environ['HOME'], args.workspace, 'gnn_related', 'dataset')
     else:
-        root = args.dataset_dir
+        root = args.data_dir
     
     ### parametrs for profiling
     tt_ndims = 3
@@ -631,44 +813,67 @@ if __name__ == '__main__':
     print("---- Num Embeddings: ", num_embeddings)
     print("---- Embeddings Dim: ", embedding_dim)
     print("Memory Usage: ", num_embeddings * embedding_dim * 4 / 1024 / 1024, "MB")
+    print("Memory Usage: ", num_embeddings * embedding_dim * 4 / 1024 / 1024 / 1024, "GB")
 
-    ctx = tt_ndims, tt_ranks, tt_p_shapes, tt_q_shapes, num_embeddings, embedding_dim
+    if args.run_one:
+        print("Running with one forward and backward pass with true data")
+        
+        ### True graph
+        train_loader, full_neighbor_loader, data = dgl_graph_loader(target_dataset, root, device, args)
 
-    ### True graph
-    # train_loader, full_neighbor_loader, data = dgl_graph_loader(target_dataset, root, device, args)
+        ### case - 1: run with one fwd and bwd pass
+        total_time = run_one(train_loader, data, args)
+        print("Mean Time: ", total_time)
+        # total_time = []
+        # for i in range(20):
+        #     total_ = run_one(train_loader, data, args)
+        #     total_time.append(total_[0])
+        # # 5.5250 - sorted, 5.3221 - unsorted
+        # print("Mean Time: ", np.mean(total_time))
 
-    ### Random sparse feature generation
-    _, indices, offsets, _ = generate_sparse_feature(
-            args.batch,
-            num_embeddings=num_embeddings,
-            pooling_factor=float(pooling_factor),
-            pooling_factor_std=float(pooling_factor_std),
-            generate_scores=False,
-            unary=False,
-            unique=False,
-        )
-    print(len(indices), len(offsets))
+    else: 
+        ### Packing the parameters
+        ctx = tt_ndims, tt_ranks, tt_p_shapes, tt_q_shapes, num_embeddings, embedding_dim
 
-    ### Random block creation
-    num_src_nodes = len(indices)
-    num_dst_nodes = int(len(indices) * 0.4)
-    num_edges = int(len(indices) * 0.4)
-    block = create_block(num_src_nodes, num_dst_nodes, num_edges)
-    
-    input_nodes = torch.arange(0, block.number_of_src_nodes())
-    offsets = torch.arange(input_nodes.shape[0] + 1)
-    print("Num. of input nodes: ", input_nodes.shape[0])
-    print("Block: ", block)
+        ### Random sparse feature generation
+        _, indices, offsets, _ = generate_sparse_feature(
+                args.batch,
+                num_embeddings=num_embeddings,
+                pooling_factor=float(pooling_factor),
+                pooling_factor_std=float(pooling_factor_std),
+                generate_scores=False,
+                unary=False,
+                unique=False,
+            )
 
-    ### case - 1: run with one fwd and bwd pass
-    # run_one(train_loader, data, args)
+        print(len(indices), len(offsets))
 
-    ### case - 2: run with one fwd pass (fbtt)
-    # test_fwd(indices, offsets, device, ctx, args)
+        num_src_nodes = len(indices)
+        num_dst_nodes = int(len(indices) * 0.4)
+        num_edges = int(len(indices) * 0.4)
 
-    ### case - 3: run with one bwd pass (fbtt)
-    test_bwd(indices, offsets, device, ctx, args)
+        ### Graph creation
+        graph = create_graph(num_src_nodes, num_dst_nodes, num_edges)
 
-    ### case - 4: run with one fwd pass (sage)
-    # test_sage_tt_fwd(block, input_nodes, offsets, ctx, args)
+        ### Random block creation
+        block = create_block(num_src_nodes, num_dst_nodes, num_edges)
+        
+        input_nodes = torch.arange(0, block.number_of_src_nodes())
+        offsets = torch.arange(input_nodes.shape[0] + 1)
+        print("Num. of input nodes: ", input_nodes.shape[0])
+        print("Block: ", block)
+
+        par_g = dgl.reorder_graph(graph, 'metis', permute_config={'k':args.partition})
+
+        ### case - 1.1: run with three layers with GraphSAGE
+        # run_one_sage(train_loader, data, args)
+
+        ### case - 2: run with one fwd pass (fbtt)
+        test_fwd(indices, offsets, device, ctx, args)
+
+        ### case - 3: run with one bwd pass (fbtt)
+        test_bwd(indices, offsets, device, ctx, args)
+
+        ### case - 4: run with one fwd pass (sage)
+        test_sage_tt_fwd(block, input_nodes, offsets, ctx, args)
 

@@ -190,14 +190,19 @@ def dgl_graph_loader(target_dataset, root, device, args):
         for threshold in torch.nonzero(torch.bincount(graph.in_degrees())[100:]):
             thread_sum += torch.bincount(graph.in_degrees())[100+threshold[0]]
         print("---- The number of nodes with degree > 100: ", thread_sum.item())
-        plt.rc('xtick', labelsize=20) 
-        plt.rc('ytick', labelsize=20) 
+        in_degrees = graph.in_degrees().numpy()
+        out_degrees = graph.out_degrees().numpy()
+        degrees = in_degrees + out_degrees
+        unique_degrees, counts = np.unique(degrees, return_counts=True)
+        plt.rc('xtick', labelsize=18) 
+        plt.rc('ytick', labelsize=18) 
         plt.rcParams.update({'font.size': 22})
         plt.figure(figsize=(12, 6))
-        plt.plot(torch.arange(len(graph.in_degrees())),  graph.in_degrees())
-        plt.xlabel('Node Index')
-        plt.ylabel('# degree')
-        plt.title('Graph Degree Distribution')
+        # plt.plot(torch.arange(len(graph.in_degrees())),  graph.in_degrees())
+        plt.bar(unique_degrees[:100], counts[:100], width=1.5, color='#6A579C')
+        plt.xlabel('Node Degree')
+        plt.ylabel('Edge Count')
+        # plt.title('Graph Degree Distribution')
         plt.grid(True)
         plt.savefig("./figures/degree_distribution_{}.pdf".format(target_dataset), dpi=1500)
 
@@ -371,7 +376,6 @@ def recursive_metis_reorder(graph, current_level, max_level, partition_list):
 def recursive_partition(graph, level, num_parts):
     if level == 0:
         return {f"level_{level}": graph}
-
     partitions = dgl.metis_partition(graph, num_parts[level])
     results = {}
     for part_id, subgraph in partitions.items():
@@ -404,9 +408,7 @@ def dgl_partition(graph, labels, train_idx, val_idx, test_idx, partition):
     graph.ndata['train_mask'] = torch.tensor(train_mask)
     graph.ndata['val_mask'] = torch.tensor(val_mask)
     graph.ndata['test_mask'] = torch.tensor(test_mask)
-
     if partition != 0:
-        
         if partition == -1:
             partition_with_subgraph = False
             if partition_with_subgraph:
@@ -416,21 +418,27 @@ def dgl_partition(graph, labels, train_idx, val_idx, test_idx, partition):
                 par_g = recursive_partition(graph, level=2, num_parts=[2, 2, 2])
                 for part_id, part in par_g.items():
                     result.append(map_indices_to_partition(graph, part))
+                print("Partitioning done!")
+
             else:
                 # par_g = custom_reordering(graph)
                 ### Reorder
                 print("Partition graph with multi-level METIS")
-                par_g = recursive_metis_reorder(graph, 1, 3, [125, 140, 140])
+                par_g = recursive_metis_reorder(graph, 1, 3, [50, 60, 60])
+                print("Partitioning done!")
+
         elif partition == -2:
             print("Partition graph by rcmk")
             par_g = dgl.reorder_graph(graph, 'rcmk')
+            print("Partitioning done!")
 
         else:
-            print("Randomly permute the node order first")
-            nodes_perm = torch.randperm(graph.num_nodes())
-            par_g = dgl.reorder_graph(graph, 'custom', permute_config={'nodes_perm':nodes_perm})
+            # print("Randomly permute the node order first")
+            # nodes_perm = torch.randperm(graph.num_nodes())
+            # par_g = dgl.reorder_graph(graph, 'custom', permute_config={'nodes_perm':nodes_perm})
             print("Partition graph by METIS into {} parts".format(partition))
             par_g = dgl.reorder_graph(graph, 'metis', permute_config={'k':partition})
+            print("Partitioning done!")
 
     else:
         print("Randomly permute the node order")

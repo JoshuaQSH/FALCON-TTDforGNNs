@@ -26,7 +26,7 @@ from utils import Logger, gpu_timing, memory_usage, calculate_access_percentages
 # sys.path.insert(0, '/home/shenghao/home-3090/FBTT-Embedding')
 # from tt_embeddings_ops import TTEmbeddingBag
 from FBTT.tt_embeddings_ops import TTEmbeddingBag
-from Efficient_TT.efficient_tt import Eff_TTEmbedding
+# from Efficient_TT.efficient_tt import Eff_TTEmbedding
 # from Efficient_TT.breakdown.efficient_tt import Eff_TTEmbedding
 
 
@@ -181,14 +181,17 @@ def run(args, device, data, train_loader, evaluator, dist=None):
 
     # Add logging
     # Setup the saved log file, with time and filename
-    saved_log_path = '../../../logs/'
+    saved_log_path = './logs/'
     start_time = int(round(time.time()*1000))
     timestamp = time.strftime('%Y%m%d-%H%M%S',time.localtime(start_time/1000))
 
     if args.logging:
         # saved_log_name = saved_log_path + '{}-{}-{}-{}.log'.format(args.model, args.dataset, args.batch, timestamp)
-        saved_log_name = saved_log_path + 'Baseline-{}-{}-4090-r3-{}.log'.format(args.model, args.batch, timestamp)
+        # saved_log_name = saved_log_path + 'Baseline-{}-{}-4090-r3-{}.log'.format(args.model, args.batch, timestamp)
         # saved_log_name = saved_log_path + 'Final-{}-4090-r3-{}.log'.format(args.model, timestamp)
+        # saved_log_name = saved_log_path + 'TTRankScale-{}-{}-{}-{}.log'.format(args.tt_rank, args.model, args.dataset, timestamp)
+        saved_log_name = saved_log_path + 'TTRankBaseline-{}-{}-{}-{}.log'.format(args.tt_rank, args.model, args.dataset, timestamp)
+
 
         log = Logger(saved_log_name, level='debug')
         log.logger.debug("[Running GraphSAGE Model == Hidden: {}, Layers: {} ==]".format(args.num_hidden, args.num_layers))
@@ -223,20 +226,20 @@ def run(args, device, data, train_loader, evaluator, dist=None):
                     weight_dist="normal",
                     )
 
-        elif args.emb_name == "eff":
-            print("Using Efficient TT")
-            # eff_tag == 0: both efficient
-            # eff_tag == 1: forward TT, backward efficient
-            # eff_tag == 2: forward efficient, backward TT
-            embed_layer = Eff_TTEmbedding(
-                    num_embeddings = graph.number_of_nodes(),
-                    embedding_dim = in_feats,
-                    tt_p_shapes=p_shapes,
-                    tt_q_shapes=q_shapes,
-                    tt_ranks = tt_rank,
-                    weight_dist = "uniform",
-                    batch_size = 12
-                    ).to(device)
+        # elif args.emb_name == "eff":
+        #     print("Using Efficient TT")
+        #     # eff_tag == 0: both efficient
+        #     # eff_tag == 1: forward TT, backward efficient
+        #     # eff_tag == 2: forward efficient, backward TT
+        #     embed_layer = Eff_TTEmbedding(
+        #             num_embeddings = graph.number_of_nodes(),
+        #             embedding_dim = in_feats,
+        #             tt_p_shapes=p_shapes,
+        #             tt_q_shapes=q_shapes,
+        #             tt_ranks = tt_rank,
+        #             weight_dist = "uniform",
+        #             batch_size = 12
+        #             ).to(device)
 
         if dist == 'eigen':
             eigen_vals, eigen_vecs = get_eigen(graph, in_feats, 'ogbn-arxiv')
@@ -379,10 +382,10 @@ if __name__ == "__main__":
     
     # load ogbn-products data - dgl version
     target_dataset = args.dataset
-    if args.dataset_dir == None:
+    if args.data_dir == None:
         root = os.path.join(os.environ['HOME'], args.workspace, 'gnn_related', 'dataset')
     else:
-        root = args.dataset_dir
+        root = args.data_dir
     
     train_loader, full_neighbor_loader, data = dgl_graph_loader(target_dataset, root, device, args)
     print('Init from {}'.format(args.init))

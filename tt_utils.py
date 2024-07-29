@@ -76,6 +76,7 @@ def parse_args():
     parser.add_argument('--save-model', action="store_true")
     parser.add_argument('--plot', action="store_true", help="Plot the graph degree distributitions")
     parser.add_argument('--logging', action="store_true", help="Whether to log the training process")
+    parser.add_argument('--run-one', action="store_true", help="Run syhthetic graph dataset with profiler")
 
     global args
     args = parser.parse_args()
