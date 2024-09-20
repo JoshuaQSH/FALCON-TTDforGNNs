@@ -20,7 +20,7 @@ import argparse
 import tqdm
 
 from tt_utils import *
-from utils import Logger, gpu_timing, memory_usage, calculate_access_percentages, plot_access_percentages
+from utils import Logger, gpu_timing, memory_usage, calculate_access_percentages, plot_access_percentages, plot_cumulative_access_percentages
 # from dgl_sage import SAGE
 from gnn_model import SAGE
 from graphloader import dgl_graph_loader

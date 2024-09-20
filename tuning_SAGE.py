@@ -3,23 +3,19 @@ import dgl.nn.pytorch as dglnn
 from dgl.data import AsNodePredDataset
 
 import numpy as np
-import torch as th
+import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 import torch.multiprocessing as mp
 import torch.distributed as dist
 
-from ogb.nodeproppred import DglNodePropPredDataset
-
 import os
 import time
-import argparse
-import tqdm
 
 from tt_utils import *
-from utils import Logger, gpu_timing, memory_usage, calculate_access_percentages, plot_access_percentages
-from dgl_sage import SAGE
+from utils import Logger
+from gnn_model import SAGE
 from graphloader import dgl_graph_loader
 
 import nevergrad as ng
@@ -27,11 +23,11 @@ import nevergrad as ng
 os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'max_split_size_mb:32'
 
 def compute_acc(pred, labels):
-    return (th.argmax(pred, dim=1) == labels).float().sum() / len(pred)
+    return (torch.argmax(pred, dim=1) == labels).float().sum() / len(pred)
 
 def evaluate(model, g, nfeat, labels, val_nid, test_nid, device, full_neighbor_loader):
     model.eval()
-    with th.no_grad():
+    with torch.no_grad():
         pred = model.inference(g, device, full_neighbor_loader)
     model.train()
     labels = labels.to(device)
@@ -91,7 +87,6 @@ def train(train_loader, model, loss_fcn, optimizer, lr_scheduler, nfeat, labels,
         # One of the optimization steps
         loss = loss_fcn(batch_pred, batch_labels)
         
-
         # Forward throughput
         fwd_throughput= len(seeds)/(time.time()-tic_step)
         ave_forward_throughput.append(fwd_throughput)
@@ -108,7 +103,7 @@ def train(train_loader, model, loss_fcn, optimizer, lr_scheduler, nfeat, labels,
 
         if step % args.log_every == 0:
             acc = compute_acc(batch_pred, batch_labels)
-            gpu_mem_alloc = th.cuda.max_memory_allocated() / 1000000 if th.cuda.is_available() else 0
+            gpu_mem_alloc = torch.cuda.max_memory_allocated() / 1000000 if torch.cuda.is_available() else 0
             if args.logging:
                 log.logger.debug('Step {:05d} | Loss {:.4f} | Train Acc {:.4f} | Speed (samples/sec) {:.4f} | GPU {:.1f} MB'.format(
                     step, loss.item(), acc.item(), np.mean(iter_tput[3:]), gpu_mem_alloc))
@@ -134,7 +129,7 @@ def give_record(per_epoch_time, total_time, iter_tput, args, tt_rank, log=None):
 # weights_1, weights_2, weights_3, tt_rank, data, args
 def model_tuner(tt_rank, data, args):
     train_nid, val_nid, test_nid, in_feats, labels, n_classes, nfeat, g = data
-    device = th.device(args.device)
+    device = torch.device(args.device)
 
     model = SAGE(
         num_nodes = g.number_of_nodes(), 
@@ -162,7 +157,7 @@ def model_tuner(tt_rank, data, args):
     model = model.to(device)
     loss_fcn = nn.CrossEntropyLoss()
     optimizer = optim.Adam(model.parameters(), lr=args.lr, weight_decay=args.wd)
-    lr_scheduler = th.optim.lr_scheduler.ReduceLROnPlateau(optimizer=optimizer, factor=0.8,
+    lr_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer=optimizer, factor=0.8,
                                                                   patience=800, verbose=True)
     # Training loop
     iter_tput = []
@@ -243,13 +238,13 @@ def run_single(train_loader, full_neighbor_loader, data, args):
 if __name__ == '__main__':
     args = parse_args()
     
-    if args.device != 'cpu' and th.cuda.is_available():
-        device = th.device(args.device)
+    if args.device != 'cpu' and torch.cuda.is_available():
+        device = torch.device(args.device)
         devices = list(map(int, args.num_gpus.split(',')))
         nprocs = len(devices)
         print('Using {} GPUs'.format(nprocs))
     else:
-        device = th.device('cpu')
+        device = torch.device('cpu')
         print("Training with CPU")
 
     # load ogbn-products data - dgl version
@@ -264,7 +259,9 @@ if __name__ == '__main__':
     train_loader, full_neighbor_loader, data = dgl_graph_loader(target_dataset, root, device, args)
     print('Begin with Single GPU. Init from {}'.format(args.init))
     
+    start_time = int(round(time.time()*1000))
     recommendation = run_single(train_loader, full_neighbor_loader, data, args)
     # print('Loss {:.4f}'.format(loss.item()))
+    end_time = int(round(time.time()*1000))
     print('Recommendation: ', recommendation)
-
+    print('Tunning Time: ', end_time - start_time)
