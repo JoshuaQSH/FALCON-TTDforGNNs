@@ -25,5 +25,5 @@ scipy==1.12.0
 torch-geometric==2.4.0
 torchmetrics==0.11.4
 Ninja
-
-
+nevergrad==1.0.2
+fcmaes==1.6.5

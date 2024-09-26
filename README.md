@@ -23,8 +23,9 @@ for l, (layer, block) in enumerate(zip(self.layers, blocks)):
 
 ## Prerequest
 
-- Mannaully install the correct torch+cuda version in `requirements.txt` and then try run `pip install -r requirements.txt`. 
-- Setup the custom cuda kernel:
+- Mannaully install the correct torch+cuda version in `requirements.txt` and then try run `pip install -r requirements.txt`. `dgl` and `torch v2.x` maight need to install seperately.
+
+- Setup the custom cuda kernel (the dir pointing to the `cub` need to modify first):
 ```shell
 $ cd FBTT
 $ python setup.py install
@@ -35,7 +36,9 @@ $ python setup.py install
 
 ## How to run
 
-We recommand run the model with the `run_script.sh`, but to test each module, try run it seperately. Note: if you failed with the profiling with "Failed to open/create lock file (path)", try: `sudo sysctl fs.protected_regular=0` to allow other users to access the `tmp` directory or simply use a different temporary directory.
+We recommand run the model with the `run_script.sh` for debugging or `pure_run.sh` for clear benchmarking (obtaining baseline and Falcon results), but to test each module, try run it seperately. Note: if you failed with the profiling with "Failed to open/create lock file (path)", try: `sudo sysctl fs.protected_regular=0` to allow other users to access the `tmp` directory or simply use a different temporary directory. 
+
+For one-step simple run, try: `./run_all.sh` and it will automately run all the experiments with logs.
 
 - With the scirpt:
 ```shell
@@ -48,7 +51,16 @@ $ ./run_script.sh gcn
 # Run with GAT, dataset: ogbn-arxiv, FBTT
 $ ./run_script.sh gat
 
+# Reproducing the Falcon: 
+# Baseline:
+# b1: sage-arxiv, b2: sage-product, b3: sage-paper, b4: gcn-arxiv, b5: gat-arxiv
+# falcon:
+# f1: sage-arxiv, f2: sage-product, f3: sage-paper, f4: gcn-arxiv, f5: gat-arxiv
+# f6: gcn-product, f7: gat-product, autotuning: for auttotuning
+$ ./pure_run.sh b1
 
+# one-setp simple run
+$ ./run_all.sh
 ```
 
 - Without the script:
@@ -128,27 +140,4 @@ assert len(self.tt_p_shapes) == len(self.tt_q_shapes)
 
 ```
 compute-sanitizer --tool memcheck ... --save cuda_mem_log
-```
-
-
-### Fusion and caching
-
-TTEmbeddingBag -> init (cache_size, hashtbl) -> register to List[torch.Tensor] -> cache_state, cache_freq, hashtbl, cache_optimizer_state, cache_weight[cache_size, embedding_dim]
-forward()
-preprocess_indicesi_sync(), warmup statge -> cuda_kernel_lookup(), cub::DevicePartition::Flagged() -> index for uncompressed embedding table and index for TT cores
-TTLookupFunction() -> pack the tensors -> tt_embeddings.tt_forward(), tt_embeddings.cache_forward() 
-- The uncached index row will be computed by tt_forward(), the others will be lookup by calling cache_forward() - the uncompressed embeddings table
-
-indices, input_nodes: A minibatch sample graph (block[0].shape[0])
-rowidx: index required to train
-tableidx: index already been cached
-B: The first shape of the input_nodes
-num_embeddings: The whole size of the graph (nfeat.shape[0])
-D, embedding_size: feature size (nfeat.shape[1])
-
-nnz_cached: cached index
-cache_loacation
-
-```shell
-CUDA_VISIBLE_DEVICES=1 ncu --metrics dram_bytes_read,gpu_time_duration --clock-control none -o ncu-tt-test -f --target-processes all python unitest_profile_fbtt.py
 ```
