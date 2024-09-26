@@ -25,6 +25,7 @@ def parse_args():
     parser.add_argument('--dropout', type=float, default=0.5)
     parser.add_argument('--weight-decay', type=float, default=5e-4, help="Weight for L2 loss")
     parser.add_argument('--aggregator-type', type=str, default="gcn", help="Aggregator type: mean/gcn/pool/lstm")
+    parser.add_argument('--logging-name', type=str, default="default", help="The logging file name")
     parser.add_argument('--testing', action="store_true", help="Run the testing (now for ogb-lsc)")
 
     # Data loader

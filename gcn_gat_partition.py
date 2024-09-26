@@ -186,11 +186,7 @@ def run(args, device, data, train_loader, evaluator, dist=None):
     timestamp = time.strftime('%Y%m%d-%H%M%S',time.localtime(start_time/1000))
 
     if args.logging:
-        # saved_log_name = saved_log_path + '{}-{}-{}-{}.log'.format(args.model, args.dataset, args.batch, timestamp)
-        # saved_log_name = saved_log_path + 'Baseline-{}-{}-4090-r3-{}.log'.format(args.model, args.batch, timestamp)
-        # saved_log_name = saved_log_path + 'Final-{}-4090-r3-{}.log'.format(args.model, timestamp)
-        # saved_log_name = saved_log_path + 'TTRankScale-{}-{}-{}-{}.log'.format(args.tt_rank, args.model, args.dataset, timestamp)
-        saved_log_name = saved_log_path + 'TTRankBaseline-{}-{}-{}-{}.log'.format(args.tt_rank, args.model, args.dataset, timestamp)
+        saved_log_name = saved_log_path + '{}-{}-{}-{}.log'.format(args.logging_name, args.model, args.dataset, timestamp)
 
 
         log = Logger(saved_log_name, level='debug')

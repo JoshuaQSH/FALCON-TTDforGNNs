@@ -268,16 +268,8 @@ def run_single(train_loader, full_neighbor_loader, data, args):
         is_cached = 'cached'
     else:
         is_cached = 'uncached'
-    # saved_log_name = saved_log_path + '{}-{}-{}-{}-batch-{}-par-{}-{}.log'.format(args.model, args.device, is_sample, args.fan_out, args.batch, args.partition, timestamp)
-    # saved_log_name = saved_log_path + 'TTRankScale(productB-papersF)-{}-{}-{}-{}.log'.format(args.tt_rank, args.model, args.dataset, timestamp)
-    # saved_log_name = saved_log_path + 'DiffRankPshape-{}-{}-{}.log'.format(args.tt_rank, args.p_shapes, timestamp)
-    # saved_log_name = saved_log_path + 'Partition-{}-{}-{}.log'.format(args.partition, args.batch, timestamp)
-    # saved_log_name = saved_log_path + 'MotiTest-{}-{}-{}.log'.format(args.dataset, args.batch, timestamp)
-    # saved_log_name = saved_log_path + 'CacheTest-{}-{}-noupdate-{}.log'.format(is_cached, args.cache_size, timestamp)
-    # saved_log_name = saved_log_path + 'Baseline-{}-{}-{}-r2-{}.log'.format(args.model, args.batch, args.dataset, timestamp)
-    # saved_log_name = saved_log_path + 'WeightInit-{}-{}.log'.format(args.init, timestamp)
-    # saved_log_name = saved_log_path + 'Fusion-{}.log'.format(timestamp)
-    saved_log_name = saved_log_path + 'FinalScale-{}-{}-{}-r2-{}.log'.format(args.model, args.dataset, args.batch, timestamp)
+
+    saved_log_name = saved_log_path + '{}-{}-{}-{}-{}.log'.format(args.logging_name, args.model, args.dataset, args.batch, timestamp)
 
 
     if args.logging:
